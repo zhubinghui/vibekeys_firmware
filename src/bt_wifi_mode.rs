@@ -91,6 +91,9 @@ impl Setting {
         nvs.remove("mic_model")?;
         nvs.remove(PREFER_BUILTIN_ASR_KEY)?;
         nvs.remove("state")?;
+        // ASR 配置(uri/api_key/model)存在独立 NVS 键 audio::AsrConfig 管理,
+        // 不归 Setting 管,但 Clear Config 应一并清除,否则残留导致下次开机仍读回旧 ASR。
+        nvs.remove("asr_config")?;
         Ok(())
     }
 
