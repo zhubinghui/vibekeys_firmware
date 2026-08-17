@@ -1087,10 +1087,11 @@ pub fn new_controller_service(
 pub fn start_ble_advertising(
     device: &mut BLEDevice,
     service_ids: &[BleUuid],
+    mac: &str,
 ) -> anyhow::Result<()> {
     let ble_advertising = device.get_advertising();
     let mut adv = BLEAdvertisementData::new();
-    adv.name("VibeKeys-MAX");
+    adv.name(&format!("VibeKeys {mac}"));
     adv.appearance(0x03C1);
 
     for service_id in service_ids {

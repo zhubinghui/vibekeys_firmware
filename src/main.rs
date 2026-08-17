@@ -360,9 +360,17 @@ fn main() -> anyhow::Result<()> {
 
         let mut setting_arc = Arc::new(Mutex::new((setting.clone(), nvs)));
 
-        esp32_nimble::BLEDevice::set_device_name("VibeKeys-MAX")?;
-
         let ble_device = esp32_nimble::BLEDevice::take();
+
+        // 设备名带上 BLE MAC:同一区域有多台设备时,蓝牙配对/网页过滤要能区分是哪一台。
+        // ("VibeKeys-MAX " + 17 字符 MAC = 30 字节,超 scan response 的 29 字节 name 上限会被截断,
+        //  所以名字用 "VibeKeys " 前缀。)
+        let ble_mac = ble_device.get_addr().map_err(|e| {
+            log::error!("Failed to read BLE MAC: {:?}", e);
+            e
+        })?;
+        log::info!("BLE MAC: {}", ble_mac);
+        esp32_nimble::BLEDevice::set_device_name(&format!("VibeKeys {ble_mac}"))?;
 
         let adv = ble_device.get_advertising();
 
@@ -394,6 +402,7 @@ fn main() -> anyhow::Result<()> {
         bt_keyboard_mode::start_ble_advertising(
             ble_device,
             &[keyboard.hid_service_id(), service_id],
+            &ble_mac.to_string(),
         )?;
 
         let mut key_pins = bt_keyboard_mode::KeysPin {
@@ -468,7 +477,12 @@ fn main() -> anyhow::Result<()> {
 
         log_heap();
         std::thread::sleep(std::time::Duration::from_millis(500));
-        let _ = ui::render_keyboard_view(&mut target, false, false, "Keyboard Mode");
+        let _ = ui::render_keyboard_view(
+            &mut target,
+            false,
+            false,
+            &format!("Keyboard Mode\n {ble_mac}"),
+        );
 
         runtime.block_on(keyboard_mode_main(
             &mut target,
@@ -483,6 +497,7 @@ fn main() -> anyhow::Result<()> {
             asr_config,
             controller,
             wifi_on,
+            &ble_mac.to_string(),
         ));
     }
 
@@ -711,12 +726,13 @@ async fn keyboard_mode_main(
     asr_config: Option<audio::AsrConfig>,
     controller: bt_keyboard_mode::ControllerService,
     wifi_on: bool,
+    ble_mac: &str,
 ) -> ! {
     let _ = ui::render_keyboard_view(
         display,
         true,
         ble_device.get_server().connected_count() > 0,
-        "Keyboard",
+        &format!("Keyboard\n {ble_mac}"),
     );
     let mut popup = ui::popup_centered(display.bounding_box());
     loop {

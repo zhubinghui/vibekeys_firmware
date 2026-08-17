@@ -393,8 +393,13 @@
         async function connectToDevice() {
             try {
                 // request BT
+                const filters = [{ services: [SERVICE_ID] }];
+                if (deviceNameFilter) {
+                    // Exact-name match to pin the picker to one specific device.
+                    filters.unshift({ name: deviceNameFilter });
+                }
                 device = await navigator.bluetooth.requestDevice({
-                    filters: [{ services: [SERVICE_ID] }],
+                    filters,
                     optionalServices: [SERVICE_ID]
                 });
 
@@ -787,6 +792,23 @@
             wifiList = [{ ssid: ssidParam || '', pass: passParam || '' }];
             markWifiModified();
             skipAutoLoad = true;
+        }
+
+        // Device filter (?mac=AA:BB:CC:DD:EE:FF): with several VibeKeys devices
+        // nearby, filter the Bluetooth picker to this exact one. Web Bluetooth
+        // can't filter by address, but the device advertises its MAC in the BLE
+        // name ("VibeKeys AA:BB:CC:DD:EE:FF"), so match on that name instead.
+        // Colon separators are optional (AABBCCDDEEFF works too).
+        let deviceNameFilter = null;
+        const macParam = urlParams.get('mac');
+        if (macParam) {
+            const normalized = macParam.toUpperCase().replace(/[^0-9A-F]/g, '');
+            if (/^[0-9A-F]{12}$/.test(normalized)) {
+                const formatted = normalized.match(/../g).join(':');
+                deviceNameFilter = `VibeKeys ${formatted}`;
+            } else {
+                showNotification('Error', 'Invalid ?mac= parameter (expected AA:BB:CC:DD:EE:FF)', true);
+            }
         }
 
         // Initial render: at least one empty row so the UI is usable before connect.
