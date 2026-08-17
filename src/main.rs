@@ -192,7 +192,7 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     // Custom
-    let btn2 = new_btn(
+    let mut btn2 = new_btn(
         peripherals.pins.gpio2.into(),
         esp_idf_svc::hal::gpio::Pull::Up,
         esp_idf_svc::hal::gpio::InterruptType::AnyEdge,
@@ -206,7 +206,7 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     // YOLO
-    let btn6 = new_btn(
+    let mut btn6 = new_btn(
         peripherals.pins.gpio6.into(),
         esp_idf_svc::hal::gpio::Pull::Up,
         esp_idf_svc::hal::gpio::InterruptType::AnyEdge,
@@ -234,7 +234,7 @@ fn main() -> anyhow::Result<()> {
     )?;
 
     // Rotate Push
-    let pin18 = new_btn(
+    let mut pin18 = new_btn(
         peripherals.pins.gpio18.into(),
         esp_idf_svc::hal::gpio::Pull::Up,
         esp_idf_svc::hal::gpio::InterruptType::AnyEdge,
@@ -287,6 +287,16 @@ fn main() -> anyhow::Result<()> {
 
     let runtime = runtime.unwrap();
 
+    // I2S/麦克风引脚的外设句柄只此一份:Setting→Test 会取走建驱动(Test 退出即重启,
+    // 无需归还);若没测过硬件,后面的 Keyboard/Remote 正常取走跑 ASR。
+    let mut audio_periph = Some(audio::AudioWorker {
+        in_i2s: peripherals.i2s0,
+        in_ws: peripherals.pins.gpio41.into(),
+        in_clk: peripherals.pins.gpio42.into(),
+        din: peripherals.pins.gpio40.into(),
+        in_mclk: None,
+    });
+
     let mode = loop {
         let choice = runtime.block_on(ui::boot_menu(&mut target, &mut btn7, &mut btn3, &mut btn4));
         match choice {
@@ -330,6 +340,29 @@ fn main() -> anyhow::Result<()> {
                         std::thread::sleep(std::time::Duration::from_secs(1));
                         // 清空后重启:让(已清空的)配置重新加载,避免继续用内存里的旧值。
                         esp_idf_svc::hal::reset::restart();
+                    }
+                    ui::SettingOutcome::Test => {
+                        // 硬件自检:取走 I2S 外设临时建驱动录音,测试完 drop。
+                        // 外设只能消费一次;已被消费则跳过 MIC 可视化,仅测按键。
+                        let mut audio_driver = audio_periph.take().and_then(|w| {
+                            audio::Driver::new(w)
+                                .map_err(|e| log::error!("test: audio driver init failed: {e:?}"))
+                                .ok()
+                        });
+                        runtime.block_on(ui::hardware_test_page(
+                            &mut target,
+                            &mut btn7,
+                            &mut btn3,
+                            &mut btn4,
+                            &mut btn5,
+                            &mut btn0,
+                            &mut btn2,
+                            &mut btn6,
+                            &mut pin16,
+                            &mut pin17,
+                            &mut pin18,
+                            audio_driver.as_mut(),
+                        ));
                     }
                 }
             }
@@ -451,26 +484,15 @@ fn main() -> anyhow::Result<()> {
                 // 也就不需要为 HTTPS 证书校验同步时间 —— 跳过省一段启动耗时。
                 if setting.prefer_builtin_asr && asr_config.requires_tls() {
                     if sync_time_with_retry(&mut target, &key_pins.accept, &key_pins.esc) {
-                        let worker = audio::AudioWorker {
-                            in_i2s: peripherals.i2s0,
-                            in_ws: peripherals.pins.gpio41.into(),
-                            in_clk: peripherals.pins.gpio42.into(),
-                            din: peripherals.pins.gpio40.into(),
-                            in_mclk: None,
-                        };
-                        let _ = driver.insert(audio::Driver::new(worker)?);
+                        let worker = audio_periph.take();
+                        if let Some(w) = worker {
+                            let _ = driver.insert(audio::Driver::new(w)?);
+                        }
                     } else {
                         log::warn!("Time sync canceled; starting keyboard mode without TLS ASR");
                     }
-                } else {
-                    let worker = audio::AudioWorker {
-                        in_i2s: peripherals.i2s0,
-                        in_ws: peripherals.pins.gpio41.into(),
-                        in_clk: peripherals.pins.gpio42.into(),
-                        din: peripherals.pins.gpio40.into(),
-                        in_mclk: None,
-                    };
-                    let _ = driver.insert(audio::Driver::new(worker)?);
+                } else if let Some(w) = audio_periph.take() {
+                    let _ = driver.insert(audio::Driver::new(w)?);
                 }
             }
         }
@@ -571,17 +593,12 @@ fn main() -> anyhow::Result<()> {
     }
 
     // 远程模式改用本地 ASR(MQTT 无语音通道):创建 audio::Driver 持有 I2S,
-    // 不再把音频流发给服务器。
-    let worker = audio::AudioWorker {
-        in_i2s: peripherals.i2s0,
-        in_ws: peripherals.pins.gpio41.into(),
-        in_clk: peripherals.pins.gpio42.into(),
-        din: peripherals.pins.gpio40.into(),
-        in_mclk: None,
-    };
-    let driver = audio::Driver::new(worker)
-        .map_err(|e| log::error!("Failed to create audio driver: {e:?}"))
-        .ok();
+    // 不再把音频流发给服务器。(若 I2S 已在 Setting→Test 里被消费,则无本地 ASR。)
+    let driver = audio_periph.take().and_then(|w| {
+        audio::Driver::new(w)
+            .map_err(|e| log::error!("Failed to create audio driver: {e:?}"))
+            .ok()
+    });
 
     log::info!("start ASR worker thread");
     log_heap();

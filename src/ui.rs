@@ -252,6 +252,8 @@ pub enum SettingOutcome {
     Back,
     Ota,
     ClearConfig,
+    /// 硬件自检:显示按键按下/放开,MIC 按住时可视化录音电平。
+    Test,
 }
 
 /// 等一个输入事件。旋钮方向在返回后用 rot_a/rot_b 电平判断。
@@ -335,7 +337,7 @@ pub async fn setting_page(
                 let _ = render_setting_menu(target, menu_focus, setting);
                 match wait_input(rot_a, accept, esc, next, backspace).await {
                     // 主菜单改用 Next 键切换选项;滚轮在这里不再切换(避免误触/跳格)。
-                    InputEvt::Next => menu_focus = rotate_index(menu_focus, 3, true),
+                    InputEvt::Next => menu_focus = rotate_index(menu_focus, 4, true),
                     InputEvt::Rotate => {}
                     InputEvt::Accept => match menu_focus {
                         0 => {
@@ -346,6 +348,7 @@ pub async fn setting_page(
                         1 => return SettingOutcome::Ota,
                         // 清空配置的实际动作(操作 nvs)交给 main,这里只回报意图。
                         2 => return SettingOutcome::ClearConfig,
+                        3 => return SettingOutcome::Test,
                         _ => {}
                     },
                     // 每条 cred 的增删改都即时落盘,Esc 直接返回即可。
@@ -502,6 +505,7 @@ fn render_setting_menu(
         format!("WiFi networks ({})", setting.wifi_list.len()),
         "OTA Update".to_string(),
         "Clear config".to_string(),
+        "Hardware test".to_string(),
     ];
     let item_h = LINE_H + 4;
     let start_y: i32 = 24;
@@ -532,6 +536,210 @@ fn render_setting_menu(
         }
     }
     flush(target)
+}
+
+/// 硬件自检页(Setting → Hardware test,ESC 退出)。
+///
+/// - 任意按键按下/放开:屏幕顶部显示事件(如 `ACCEPT down` / `MIC up`),滚轮显示 Rotate 事件;
+/// - MIC 按住:调用 `mic_read` 录音(底层 I2S),每个采样块取第一个采样画一根竖条,
+///   从左往右画一屏柱状波形(每个 I2S 块取第一个采样);松开 MIC 后一次性显示整段。
+///
+/// `mic_read` 为 None(设备无音频驱动)时 MIC 只当普通按键显示,不录音。
+pub async fn hardware_test_page(
+    target: &mut FrameBuffer,
+    accept: Btn<'_>,
+    esc: Btn<'_>,
+    next: Btn<'_>,
+    backspace: Btn<'_>,
+    mic: Btn<'_>,
+    custom: Btn<'_>,
+    switch: Btn<'_>,
+    rot_a: Btn<'_>,
+    rot_b: Btn<'_>,
+    rot_button: Btn<'_>,
+    mut audio: Option<&mut crate::audio::Driver>,
+) {
+    let bb = target.bounding_box();
+    let width = bb.size.width;
+    let height = bb.size.height;
+
+    // 波形区:标题(2 行事件)下面到底部。条宽 2px、间隔 1px(3px/列),条高 = 块内峰值 × 增益。
+    let wave_top: i32 = (LINE_H * 2 + 8) as i32;
+    let wave_h = (height as i32 - wave_top).max(20) as u32;
+    let wave_mid = wave_top + (wave_h as i32) / 2; // 中线:静音时画 0
+    let bar_w: i32 = 2;
+    let col_w: i32 = 3;
+    let max_cols = (width as i32 / col_w) as usize;
+    // I2S 16kHz mono,一次读 512 samples(约 32ms),取块内 |peak| 画条(单点采样随机性大,峰值才稳定)。
+    let mut sample_buf = [0i16; 512];
+    // 增益:语音峰值常在满幅的 10%-30%,×4 才能占满半屏;饱和就削顶。
+    const GAIN: i32 = 4;
+
+    let mut hist: Vec<u8> = Vec::with_capacity(max_cols); // 每列归一化幅值 0..=100
+    let mut last_evt = String::from("Test keys & mic\nhold ESC to reboot");
+
+    let mut last_states: Vec<(&str, bool)> = vec![]; // (名, 是否按下) — 仅用于结构化重画
+                                                     // 逐键命名(数组索引过不了 select! 的借用检查)。
+    let (n_mic, name_mic) = (mic, "MIC");
+    let (n_custom, name_custom) = (custom, "CUSTOM");
+    let (n_esc, name_esc) = (esc, "ESC");
+    let (n_next, name_next) = (next, "NEXT");
+    let (n_bksp, name_bksp) = (backspace, "BkSP");
+    let (n_switch, name_switch) = (switch, "SWITCH");
+    let (n_accept, name_accept) = (accept, "ACCEPT");
+    let (n_ra, name_ra) = (rot_a, "ROT-A");
+    let (n_rb, name_rb) = (rot_b, "ROT-B");
+    let (n_rbtn, name_rbtn) = (rot_button, "ROT-BTN");
+
+    let draw = |target: &mut FrameBuffer, hist: &[u8], evt: &str| {
+        let _ = clear(target, ColorFormat::CSS_BLACK);
+        let (line1, line2) = evt.split_once('\n').unwrap_or((evt, ""));
+        let _ = draw_text(
+            target,
+            line1,
+            Rectangle::new(Point::new(2, 0), Size::new(width - 2, LINE_H + 2)),
+            ColorFormat::CSS_WHITE,
+            None,
+            HorizontalAlignment::Left,
+        );
+        if !line2.is_empty() {
+            let _ = draw_text(
+                target,
+                line2,
+                Rectangle::new(
+                    Point::new(2, LINE_H as i32 + 2),
+                    Size::new(width - 2, LINE_H + 2),
+                ),
+                ColorFormat::CSS_WHITE,
+                None,
+                HorizontalAlignment::Left,
+            );
+        }
+        // 中线
+        let _ = fill_rect(
+            target,
+            Rectangle::new(Point::new(0, wave_mid), Size::new(width, 1)),
+            ColorFormat::CSS_DARK_GRAY,
+        );
+        for (i, amp) in hist.iter().enumerate() {
+            // 两侧对称条:总高 = amp/100 × wave_h
+            let h = ((*amp as u32) * wave_h / 100).max(1);
+            let x = (i as i32) * col_w;
+            let _ = fill_rect(
+                target,
+                Rectangle::new(
+                    Point::new(x, wave_mid - (h as i32) / 2),
+                    Size::new(bar_w as u32, h as u32),
+                ),
+                ColorFormat::CSS_GREEN,
+            );
+        }
+        let _ = flush(target);
+    };
+
+    draw(target, &hist, &last_evt);
+
+    loop {
+        // 1) 逐键等任意边沿(一个 select 覆盖全部 10 个输入)。
+        let (idx, is_low) = tokio::select! {
+            _ = n_mic.wait_for_any_edge() => (0usize, n_mic.is_low()),
+            _ = n_custom.wait_for_any_edge() => (1, n_custom.is_low()),
+            _ = n_esc.wait_for_any_edge() => (2, n_esc.is_low()),
+            _ = n_next.wait_for_any_edge() => (3, n_next.is_low()),
+            _ = n_bksp.wait_for_any_edge() => (4, n_bksp.is_low()),
+            _ = n_switch.wait_for_any_edge() => (5, n_switch.is_low()),
+            _ = n_accept.wait_for_any_edge() => (6, n_accept.is_low()),
+            _ = n_ra.wait_for_any_edge() => (7, true),
+            _ = n_rb.wait_for_any_edge() => (8, true),
+            _ = n_rbtn.wait_for_any_edge() => (9, n_rbtn.is_low()),
+        };
+        // 消抖:等 20ms 再确认电平(旋钮除外,边沿即事件)。
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let (name, pressed) = match idx {
+            0 => (name_mic, n_mic.is_low()),
+            1 => (name_custom, n_custom.is_low()),
+            2 => (name_esc, n_esc.is_low()),
+            3 => (name_next, n_next.is_low()),
+            4 => (name_bksp, n_bksp.is_low()),
+            5 => (name_switch, n_switch.is_low()),
+            6 => (name_accept, n_accept.is_low()),
+            7 => (name_ra, true),
+            8 => (name_rb, true),
+            _ => (name_rbtn, n_rbtn.is_low()),
+        };
+        let _ = is_low;
+
+        // ESC 也是被测按键;长按 1.2s 直接重启(比返回主菜单干净:音频驱动等外设
+        // 无需归还,重启后全部归零)。按下先立即画出来,否则长按检测期间屏幕停留在
+        // 上一事件,看不到 ESC down。
+        if idx == 2 {
+            if pressed {
+                draw(target, &hist, "ESC down\nhold 1.2s to reboot");
+            }
+            let mut held_ms = 0u32;
+            while n_esc.is_low() && held_ms < 1200 {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                held_ms += 50;
+            }
+            if held_ms >= 1200 {
+                esp_idf_svc::hal::reset::restart();
+            }
+        }
+
+        // 旋钮旋转:只记事件,不区别方向(A/B 两相都触发)。
+        let evt_text = if (7..=8).contains(&idx) {
+            format!("Rotate!\n{name} edge")
+        } else {
+            format!("{} {}", name, if pressed { "down" } else { "up" })
+        };
+        last_evt = evt_text;
+        // 记录该键最新状态(重画用)。
+        if let Some(st) = last_states.iter_mut().find(|(n, _)| *n == name) {
+            st.1 = pressed;
+        } else {
+            last_states.push((name, pressed));
+        }
+
+        // 2) MIC 按下且驱动可用 → 按住期间静默录音(不画屏),松开后一次性画整段波形。
+        if idx == 0 && pressed {
+            if let Some(driver) = audio.as_mut() {
+                // 每块(512 samples ≈ 32ms)取第一个采样,read 返回字节数转样本数。
+                // 录满 max_cols 块(≈ 一屏宽 ≈ 10s)或松开 MIC 即停。
+                let mut rec: Vec<u8> = Vec::with_capacity(max_cols);
+                loop {
+                    if n_mic.is_high() {
+                        break;
+                    }
+                    let bytes = driver.read(unsafe {
+                        std::slice::from_raw_parts_mut(
+                            sample_buf.as_mut_ptr() as *mut u8,
+                            sample_buf.len() * 2,
+                        )
+                    });
+                    if let Ok(n) = bytes {
+                        if n > 0 {
+                            // 块内峰值归一化 + 增益:|peak|×GAIN / 32768 → 0..=100(饱和削顶)
+                            let samples = &sample_buf[..n / 2];
+                            let peak = samples
+                                .iter()
+                                .map(|s| (s.abs() as i64) * (GAIN as i64))
+                                .max()
+                                .unwrap_or(0);
+                            let amp = (peak.min(i16::MAX as i64) * 100 / 32768) as u8;
+                            if rec.len() >= max_cols {
+                                break; // 录满一屏,提前结束
+                            }
+                            rec.push(amp);
+                        }
+                    }
+                }
+                hist = rec;
+                last_evt = "MIC captured\npress MIC again to redo".to_string();
+            }
+        }
+
+        draw(target, &hist, &last_evt);
+    }
 }
 
 pub fn render_list(
