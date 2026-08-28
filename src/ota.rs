@@ -13,15 +13,15 @@ use esp_idf_svc::{
 
 /// 从 GitHub release 拉最新固件的目标 URL。
 ///
-/// 默认指向本项目(second-state/vibekeys_firmware)的 `releases/latest`(稳定版)。CI 构建
+/// 默认指向本 fork(zhubinghui/vibekeys_firmware)的 `releases/latest`(稳定版)。CI 构建
 /// 预发布(rc/beta)时,通过环境变量 `VIBEKEYS_OTA_URL` 覆盖成该 tag 的具体资产 URL——因为
 /// GitHub 的 `releases/latest` 排除 prerelease,prerelease 必须钉死 tag 才能下到。
 /// 资产按硬件 feature 选:max2 → `vibekeys_max2_ota.bin`,否则 → `vibekeys_ota.bin`。
 #[cfg(feature = "max2")]
-const DEFAULT_OTA_URL: &str = "https://github.com/second-state/vibekeys_firmware/releases/latest/download/vibekeys_max2_ota.bin";
+const DEFAULT_OTA_URL: &str = "https://github.com/zhubinghui/vibekeys_firmware/releases/latest/download/vibekeys_max2_ota.bin";
 #[cfg(not(feature = "max2"))]
 const DEFAULT_OTA_URL: &str =
-    "https://github.com/second-state/vibekeys_firmware/releases/latest/download/vibekeys_ota.bin";
+    "https://github.com/zhubinghui/vibekeys_firmware/releases/latest/download/vibekeys_ota.bin";
 
 pub const OTA_DOWNLOAD_URL: &str = match option_env!("VIBEKEYS_OTA_URL") {
     Some(url) => url,
