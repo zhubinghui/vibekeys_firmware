@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 
 use crate::protocol::{ClientMessage, ImageFormat, ScreenImageChunk};
 
-/// discovery topic 在 `MqttServer::new` 动态构造:`{user}/+/+/vibetty`,user = username 或 `root`。
+// discovery topic 在 `MqttServer::new` 动态构造:`{user}/+/+/vibetty`,user = username 或 `root`。
 
 /// 单张 screen 重组上限,超过则丢弃防 OOM。
 const REASSEMBLY_MAX: usize = 256 * 1024;
@@ -109,17 +109,13 @@ fn default_state_working() -> String {
 /// vibetty presence 的屏幕输出格式。决定订阅 `{p}/screen` 还是 `{p}/screen_text`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 enum ScreenFormat {
+    #[default]
     High,
     Medium,
     Low,
     Text,
-}
-
-impl Default for ScreenFormat {
-    fn default() -> Self {
-        Self::High
-    }
 }
 
 impl ScreenFormat {
@@ -605,8 +601,7 @@ fn parse_broker_uri(uri: &str) -> anyhow::Result<BrokerInfo> {
     let default_port = if use_tls { 8883 } else { 1883 };
     let port = hostport
         .rsplit_once(':')
-        .map(|(_, p)| p.parse::<u16>().ok())
-        .flatten()
+        .and_then(|(_, p)| p.parse::<u16>().ok())
         .unwrap_or(default_port);
     let host = hostport
         .rsplit_once(':')

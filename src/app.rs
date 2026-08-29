@@ -146,7 +146,7 @@ pub async fn run(
     const RTT_TIMEOUT_FLOOR: std::time::Duration = std::time::Duration::from_millis(400);
     // 还没有 RTT 样本时(首次翻页前)用的默认超时。
     const RTT_TIMEOUT_DEFAULT: std::time::Duration = std::time::Duration::from_millis(1500);
-    let view_windows_height = crate::lcd::DISPLAY_HEIGHT as usize;
+    let view_windows_height = crate::lcd::DISPLAY_HEIGHT;
     /// 滚轮每格本地平移的像素步长(可调)。
     const SCROLL_STEP_PX: usize = 20;
 
@@ -170,7 +170,7 @@ pub async fn run(
                         .unwrap_or(RTT_TIMEOUT_DEFAULT)
                         .max(RTT_TIMEOUT_FLOOR);
                     if pending_scroll.is_some()
-                        && pending_since.map_or(false, |t| t.elapsed() >= timeout)
+                        && pending_since.is_some_and(|t| t.elapsed() >= timeout)
                     {
                         log::info!(
                             "Pending scroll timed out (>{timeout:?}, avg RTT={rtt_avg:?}), clearing"
@@ -342,7 +342,7 @@ pub async fn run(
                     if let Some(bytes) = keymaps
                         .keys
                         .get(KeymapConfig::KEY_NEXT)
-                        .and_then(|action| key_action_to_ansi(action))
+                        .and_then(key_action_to_ansi)
                     {
                         server
                             .send(protocol::ClientMessage::PtyInput(bytes))
@@ -373,7 +373,7 @@ pub async fn run(
                     if let Some(bytes) = keymaps
                         .keys
                         .get(KeymapConfig::KEY_SWITCH)
-                        .and_then(|action| key_action_to_ansi(action))
+                        .and_then(key_action_to_ansi)
                     {
                         server
                             .send(protocol::ClientMessage::PtyInput(bytes))
@@ -399,7 +399,7 @@ pub async fn run(
                     if let Some(bytes) = keymaps
                         .keys
                         .get(KeymapConfig::KEY_CUSTOM)
-                        .and_then(|action| key_action_to_ansi(action))
+                        .and_then(key_action_to_ansi)
                     {
                         server
                             .send(protocol::ClientMessage::PtyInput(bytes))
@@ -935,7 +935,7 @@ pub fn key_action_to_ansi(action: &bt_keyboard_mode::KeyAction) -> Option<Vec<u8
                     if ch.is_ascii_lowercase() || ch.is_ascii_uppercase() {
                         // A-Z maps to 0x01-0x1A
                         ch = ch.to_ascii_uppercase();
-                        ch = ch - b'@'; // A=0x41, 0x41-0x40=0x01
+                        ch -= b'@'; // A=0x41, 0x41-0x40=0x01
                     } else if ch == b' ' {
                         ch = 0x00; // Ctrl+Space = NUL
                     }
@@ -1071,25 +1071,22 @@ pub mod key_task {
         tx: crate::audio::EventTx,
     ) -> anyhow::Result<()> {
         loop {
-            if let Err(_) = btn_a.wait_for_any_edge().await {
+            if btn_a.wait_for_any_edge().await.is_err() {
                 return Err(anyhow::anyhow!("Failed to wait for button edge"));
             }
 
-            if let Err(_) = if btn_a.is_high() {
+            let send_rotate = if btn_a.is_high() {
                 if btn_b.is_low() {
                     tx.send(super::Event::RotateDown)
                 } else {
                     tx.send(super::Event::RotateUp)
                 }
+            } else if btn_b.is_low() {
+                tx.send(super::Event::RotateUp)
             } else {
-                if btn_b.is_low() {
-                    tx.send(super::Event::RotateUp)
-                } else {
-                    tx.send(super::Event::RotateDown)
-                }
-            }
-            .await
-            {
+                tx.send(super::Event::RotateDown)
+            };
+            if send_rotate.await.is_err() {
                 return Err(anyhow::anyhow!("Failed to send rotate event"));
             }
         }
@@ -1103,16 +1100,11 @@ pub mod key_task {
     }
 
     #[repr(u8)]
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Default)]
     pub enum MicMode {
         PushToTalk,
+        #[default]
         Toggle,
-    }
-
-    impl Default for MicMode {
-        fn default() -> Self {
-            Self::Toggle
-        }
     }
 
     impl From<u8> for MicMode {
@@ -1187,7 +1179,7 @@ pub mod key_task {
             }
 
             log::info!("Button K{port} pressed");
-            if let Err(_) = tx.send(crate::app::Event::Backspace).await {
+            if tx.send(crate::app::Event::Backspace).await.is_err() {
                 return Err(anyhow::anyhow!("Failed to send K{port} event"));
             }
 
@@ -1200,7 +1192,7 @@ pub mod key_task {
                     }
 
                     log::info!("Button K{port} pressed");
-                    if let Err(_) = tx.send(crate::app::Event::Backspace).await {
+                    if tx.send(crate::app::Event::Backspace).await.is_err() {
                         return Err(anyhow::anyhow!("Failed to send K{port} event"));
                     }
 
@@ -1227,7 +1219,7 @@ pub mod key_task {
             // 真实按下误判为抖动丢弃 → text 流期间按旋钮打不开 session list。改用 ISR 边沿
             // 触发,下面的 sleep 做去抖。
             log::info!("Button K{port} pressed");
-            if let Err(_) = tx.send(event.clone()).await {
+            if tx.send(event.clone()).await.is_err() {
                 return Err(anyhow::anyhow!("Failed to send K{port} event"));
             }
 

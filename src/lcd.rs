@@ -373,8 +373,8 @@ impl DisplayTargetDrive for FrameBuffer {
 
     fn flush(&mut self) -> anyhow::Result<()> {
         let bounding_box = self.bounding_box();
-        let x_start = bounding_box.top_left.x as i32;
-        let y_start = bounding_box.top_left.y as i32;
+        let x_start = bounding_box.top_left.x;
+        let y_start = bounding_box.top_left.y;
         let x_end = bounding_box.top_left.x + bounding_box.size.width as i32;
         let y_end = bounding_box.top_left.y + bounding_box.size.height as i32;
 
@@ -450,6 +450,7 @@ pub fn display_png<D: DisplayTargetDrive>(
     Ok(())
 }
 
+#[allow(dead_code)] // 旧 JPEG 路径,现走 new_jpg
 pub fn display_jpeg(jpeg: &[u8]) -> anyhow::Result<()> {
     let jpeg_buffer = crate::new_jpg::esp_jpeg_decode_one_picture(jpeg)?;
     log::info!(
@@ -584,7 +585,7 @@ fn new_terminal_renderer() -> embedded_graphics_terminal::TerminalRenderer {
 /// renderer 按 3 屏高创建,故 rows() 返回 3×可见行;sync_cells 与 parser 都用这个。
 pub fn terminal_text_cells() -> (u16, u16) {
     let renderer = new_terminal_renderer();
-    (renderer.cols() as u16, renderer.rows() as u16)
+    (renderer.cols(), renderer.rows())
 }
 
 impl UI {

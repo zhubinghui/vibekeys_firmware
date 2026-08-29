@@ -1,3 +1,10 @@
+// 架构性 lint:模式入口函数天然多参(外设句柄逐个传入),重构签名是独立议题。
+#![allow(clippy::too_many_arguments)]
+// NEXT / AFE 是硬件与 esp-sr 的领域术语,保持全大写。
+#![allow(clippy::upper_case_acronyms)]
+// ESP-IDF 的 FFI 配置结构体字段极多,default() 后逐字段赋值比 struct 字面量可读。
+#![allow(clippy::field_reassign_with_default)]
+
 use std::sync::{Arc, Mutex};
 
 use embedded_graphics::prelude::{Dimensions, WebColors};
@@ -398,9 +405,8 @@ fn main() -> anyhow::Result<()> {
         // 设备名带上 BLE MAC:同一区域有多台设备时,蓝牙配对/网页过滤要能区分是哪一台。
         // ("VibeKeys-MAX " + 17 字符 MAC = 30 字节,超 scan response 的 29 字节 name 上限会被截断,
         //  所以名字用 "VibeKeys " 前缀。)
-        let ble_mac = ble_device.get_addr().map_err(|e| {
+        let ble_mac = ble_device.get_addr().inspect_err(|&e| {
             log::error!("Failed to read BLE MAC: {:?}", e);
-            e
         })?;
         log::info!("BLE MAC: {}", ble_mac);
         esp32_nimble::BLEDevice::set_device_name(&format!("VibeKeys {ble_mac}"))?;
@@ -563,7 +569,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     if setting.server_url.starts_with("mqtts")
-        || asr_config.as_ref().map_or(false, |c| c.requires_tls())
+        || asr_config.as_ref().is_some_and(|c| c.requires_tls())
     {
         let _ = ui::render_keyboard_view(&mut target, false, false, "Syncing time...");
         if !sync_time_with_retry(&mut target, &btn7, &btn3) {

@@ -9,7 +9,7 @@
 //! escape codes, only describes the supported subset.
 //!
 //! > *Note:* if `embedded-text` fails to parse an escape sequence, it will ignore the `\x1b` character
-//! and display the rest as normal text.
+//! > and display the rest as normal text.
 //!
 //! All escape sequences start with the `\x1b[` sequence, where `\x1b` is the ASCII `escape`
 //! character. `embedded-text` supports a subset of the `SGR` parameters, which are numeric codes

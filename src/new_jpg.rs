@@ -93,6 +93,7 @@ impl JpegBufferu16 {
         self.data.as_mut_ptr() as *mut u8
     }
 
+    #[allow(dead_code)] // 旧 LCD 直刷路径,现走 new_jpg 解码链
     pub fn flush_to_lcd(&self) -> anyhow::Result<()> {
         let ptr = unsafe {
             std::slice::from_raw_parts(self.data.as_ptr() as *const u8, self.data.len() * 16)
@@ -188,10 +189,9 @@ pub fn esp_jpeg_decode_one_picture(data: &[u8]) -> anyhow::Result<JpegBufferu16>
         // let out_len = (*out_info).width as usize * (*out_info).height as usize * 2;
 
         // Allocate aligned output buffer
-        let mut out_buf =
-            JpegBufferu16::new((*out_info).width as usize, (*out_info).height as usize);
+        let mut out_buf = JpegBufferu16::new(out_info.width as usize, out_info.height as usize);
 
-        jpeg_io.outbuf = out_buf.as_mut_ptr() as *mut u8;
+        jpeg_io.outbuf = out_buf.as_mut_ptr();
 
         // Start decode jpeg
         let ret = jpeg_dec_process(decoder.handle, jpeg_io.as_mut());

@@ -124,6 +124,7 @@ fn flush(target: &mut FrameBuffer) -> anyhow::Result<()> {
 
 /// 显示一帧 JPEG 屏幕帧(直接刷 LCD,等价 `lcd::display_jpeg`)。
 /// 放在 ui.rs 便于 app.rs 与 popup 等统一从 `ui::` 调用。
+#[allow(dead_code)] // 旧 JPEG 路径,现走 new_jpg
 pub fn display_jpeg(jpeg: &[u8]) -> anyhow::Result<()> {
     crate::lcd::display_jpeg(jpeg)
 }
@@ -386,9 +387,7 @@ pub async fn setting_page(
                             if let Err(e) = BtSetting::save_wifi_list(nvs, &setting.wifi_list) {
                                 log::error!("Failed to save wifi_list: {:?}", e);
                             }
-                            if cred_focus > 0 {
-                                cred_focus -= 1;
-                            }
+                            cred_focus = cred_focus.saturating_sub(1);
                         }
                     }
                     InputEvt::Esc => state = SettingState::Menu,
@@ -629,7 +628,7 @@ pub async fn hardware_test_page(
                 target,
                 Rectangle::new(
                     Point::new(x, wave_mid - (h as i32) / 2),
-                    Size::new(bar_w as u32, h as u32),
+                    Size::new(bar_w as u32, h),
                 ),
                 ColorFormat::CSS_GREEN,
             );
