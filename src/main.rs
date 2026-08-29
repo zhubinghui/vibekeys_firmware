@@ -15,6 +15,7 @@ use crate::lcd::DisplayTargetDrive;
 mod ansi_plugin;
 mod app;
 mod audio;
+mod broker_uri;
 mod bt_keyboard_mode;
 mod bt_wifi_mode;
 #[cfg(feature = "i2c_oled")]
