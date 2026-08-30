@@ -31,6 +31,18 @@ pub const DISPLAY_WIDTH: usize = 284;
 pub const DISPLAY_HEIGHT: usize = 78;
 
 static mut ESP_LCD_PANEL_HANDLE: esp_idf_svc::sys::esp_lcd_panel_handle_t = std::ptr::null_mut();
+
+/// flush 用的两块内部 DMA 弹跳缓冲(乒乓轮换),init_lcd 时一次性分配。
+///
+/// 帧缓冲住在 PSRAM(Box 大分配走 SPIRAM_USE_MALLOC),而 S3 的 GPSPI DMA 读不了
+/// PSRAM —— esp-idf 会为每个传输块临时 heap_caps_aligned_alloc 一块内部 bounce,
+/// WiFi/BLE 把内部堆挤碎后就中途 NO_MEM(错误码 257),半帧弃发,表现为屏幕
+/// 下 1/3 恒黑。在启动早期(内部堆最充裕时)一次性预留,彻底绕开该路径。
+/// 乒乓安全性:esp_lcd 下一次 draw_bitmap 的命令阶段(轮询)会先排空所有在飞行
+/// 的 color 块 —— 即写 A 之前 B 必已发完,反之亦然。
+const FLUSH_BAND_ROWS: usize = DISPLAY_HEIGHT.div_ceil(4);
+const FLUSH_BAND_BYTES: usize = FLUSH_BAND_ROWS * DISPLAY_WIDTH * 2;
+static mut FLUSH_BOUNCE: [*mut u8; 2] = [std::ptr::null_mut(); 2];
 pub type ColorFormat = Rgb565;
 
 pub fn init_spi(_spi: SPI3, mosi: Gpio21, clk: Gpio47) -> Result<(), EspError> {
@@ -106,6 +118,20 @@ pub fn init_lcd(cs: Gpio12, dc: Gpio13, rst: Gpio14) -> Result<(), EspError> {
             DISPLAY_MIRROR_Y
         ))?;
         esp!(esp_lcd_panel_disp_on_off(panel, true))?; /* 启动屏幕 */
+
+        // 索引循环而非 iter_mut():对 static mut 取引用是 Rust 2024 禁项,直接按位赋值。
+        #[allow(clippy::needless_range_loop)]
+        for i in 0..2 {
+            let p =
+                heap_caps_aligned_alloc(64, FLUSH_BAND_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL)
+                    as *mut u8;
+            assert!(
+                !p.is_null(),
+                "FLUSH_BOUNCE alloc failed at init (internal DMA heap exhausted at boot)"
+            );
+            FLUSH_BOUNCE[i] = p;
+            ::log::info!("FLUSH_BOUNCE[{i}] = {:p}", p);
+        }
     }
 
     Ok(())
@@ -378,8 +404,46 @@ impl DisplayTargetDrive for FrameBuffer {
         let x_end = bounding_box.top_left.x + bounding_box.size.width as i32;
         let y_end = bounding_box.top_left.y + bounding_box.size.height as i32;
 
+        // 经内部 DMA 弹跳区按条带发送:见 FLUSH_BOUNCE 注释。
+        let flush_banded = |data: &[u8]| -> i32 {
+            let mut e = 0;
+            let mut b = 0usize;
+            let mut y = 0usize;
+            while y < DISPLAY_HEIGHT {
+                let rows = FLUSH_BAND_ROWS.min(DISPLAY_HEIGHT - y);
+                let bytes = rows * DISPLAY_WIDTH * 2;
+                let off = y * DISPLAY_WIDTH * 2;
+                unsafe {
+                    let bounce = FLUSH_BOUNCE[b % 2];
+                    std::ptr::copy_nonoverlapping(data.as_ptr().add(off), bounce, bytes);
+                    e = esp_idf_svc::sys::esp_lcd_panel_draw_bitmap(
+                        ESP_LCD_PANEL_HANDLE,
+                        0,
+                        y as i32,
+                        DISPLAY_WIDTH as i32,
+                        (y + rows) as i32,
+                        bounce.cast(),
+                    );
+                }
+                if e != 0 {
+                    unsafe {
+                        ::log::warn!(
+                            "flush band {b} y={y} rows={rows} err={e}, free DMA heap={}",
+                            esp_idf_svc::sys::heap_caps_get_free_size(
+                                esp_idf_svc::sys::MALLOC_CAP_DMA
+                            )
+                        );
+                    }
+                    break;
+                }
+                b += 1;
+                y += rows;
+            }
+            e
+        };
         for i in 0..5 {
-            let e = flush_display(self.buffers.data(), x_start, y_start, x_end, y_end);
+            let e = flush_banded(self.buffers.data());
+            let _ = (x_start, y_start, x_end, y_end);
             if e != 0 {
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 crate::log_heap();
