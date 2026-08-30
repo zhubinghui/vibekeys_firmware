@@ -794,6 +794,30 @@ async fn open_session_picker(
                 let _ = send_active_sync(server, false).await;
                 return Ok(());
             }
+            PickerEvt::Key(Event::ExitChord) => {
+                // 与 run() 的确认框同语义:组合是边沿事件,按住不重发,
+                // 收到的 Accept/Esc 必然是松开后的全新按压。
+                let _ = popup.show(ui.display_mut(), "Restart to menu?\nACCEPT=Yes  ESC=No");
+                loop {
+                    match rx.recv().await {
+                        Some(Event::Accept) => {
+                            let _ = popup.show(ui.display_mut(), "Restarting...");
+                            esp_idf_svc::hal::reset::restart();
+                        }
+                        Some(Event::Esc) => {
+                            let _ = popup.hide(ui.display_mut());
+                            // 弹窗盖过列表区域,置空指纹强制下一轮整列表重绘。
+                            last_sig = None;
+                            break;
+                        }
+                        Some(_) => {}
+                        None => {
+                            let _ = send_active_sync(server, false).await;
+                            return Ok(());
+                        }
+                    }
+                }
+            }
             PickerEvt::Key(_) => {} // 旋钮方向 / 其它键在选择器里忽略
             PickerEvt::Mqtt(crate::mqtt::MqttEvent::Presence { .. }) => {
                 let new_labels = server.session_labels();
