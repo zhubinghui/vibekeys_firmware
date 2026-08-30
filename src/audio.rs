@@ -118,13 +118,19 @@ impl AFE {
         unsafe { (afe_handle.as_ref().unwrap().feed.unwrap())(afe_data, data.as_ptr()) }
     }
 
+    /// `fetch` 返回空指针时的哨兵错误码(esp-sr 正常错误走 `ret_value`,不会用到该值)。
+    const FETCH_NULL: i32 = i32::MIN;
+
     fn fetch_without_cache(&self) -> Result<AFEResult, i32> {
         let afe_handle = self.handle;
         let afe_data = self.data;
         unsafe {
-            let result = (afe_handle.as_ref().unwrap().fetch.unwrap())(afe_data)
-                .as_mut()
-                .unwrap();
+            // FFI 返回的指针可能为 NULL;这里 panic 会在 panic_abort 下整机重启,
+            // 转成 Err 交给 afe_worker 的错误路径(告警 + 退避)处理。
+            let Some(result) = (afe_handle.as_ref().unwrap().fetch.unwrap())(afe_data).as_mut()
+            else {
+                return Err(Self::FETCH_NULL);
+            };
 
             if result.ret_value != 0 {
                 return Err(result.ret_value);
@@ -153,12 +159,25 @@ fn afe_worker(afe_handle: Arc<AFE>, tx: EventTx) -> anyhow::Result<()> {
     crate::log_heap();
     let mut last_mic_state = false;
 
+    let mut consecutive_errors: u32 = 0;
     loop {
-        let result = afe_handle.fetch_without_cache();
-        if let Err(_e) = &result {
-            continue;
-        }
-        let result = result.unwrap();
+        let result = match afe_handle.fetch_without_cache() {
+            Ok(r) => {
+                consecutive_errors = 0;
+                r
+            }
+            Err(code) => {
+                // fetch 出错是立即返回的(正常时阻塞等帧),持续出错若直接 continue
+                // 就是 100% CPU 的热转,会饿死同核任务;退避 10ms 再试。
+                // 错误码只在首次和每第 100 次打一条,既留下现场又不刷屏。
+                consecutive_errors = consecutive_errors.saturating_add(1);
+                if consecutive_errors == 1 || consecutive_errors % 100 == 0 {
+                    log::warn!("AFE fetch error {code} (x{consecutive_errors})");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                continue;
+            }
+        };
         if result.data.is_empty() {
             continue;
         }
@@ -227,8 +246,11 @@ fn audio_task_run(
                 len
             );
             break;
-        } else {
-            chunk_tx.send(read_buffer.clone()).unwrap();
+        } else if chunk_tx.send(read_buffer.clone()).is_err() {
+            // 接收端(AFE feed 线程)已退出 —— 模式切换/ASR 结束的正常收尾,
+            // 结束采集循环即可,panic 会在 panic_abort 下整机重启。
+            log::warn!("I2S consumer gone, stopping capture");
+            break;
         }
     }
 

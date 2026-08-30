@@ -593,10 +593,15 @@ fn main() -> anyhow::Result<()> {
                     .enable_all()
                     .build()
                     .expect("key-thread runtime");
-                rt.block_on(app::listen_all_keys(
+                if let Err(e) = rt.block_on(app::listen_all_keys(
                     btn2, btn4, btn5, btn6, btn3, btn7, pin16, pin17, pin18, key_tx,
-                ))
-                .unwrap();
+                )) {
+                    // 按键监听死了 = 设备不可交互,重启是正确的恢复手段。之前的
+                    // .unwrap() 效果相同(panic_abort),但这里把原因留进日志、意图写明。
+                    // (监听函数拿走了各 GPIO 的所有权,无法原地重试。)
+                    log::error!("Key listener died: {e:?}; restarting");
+                    esp_idf_svc::hal::reset::restart();
+                }
             })?;
     }
 
@@ -982,7 +987,10 @@ pub async fn handle_key_event(
                 log::info!("Accept button pressed, starting advertising");
                 let mut adv = ble_device.get_advertising().lock();
                 if !adv.is_advertising() {
-                    adv.start().unwrap();
+                    if let Err(e) = adv.start() {
+                        // BLE 栈拒绝(如连接数已满)不值得整机重启;按键可重试。
+                        log::warn!("Failed to (re)start BLE advertising: {e:?}");
+                    }
                 }
             }
 
