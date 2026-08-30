@@ -104,7 +104,7 @@ The point of a list is **mobility**: so the device can follow you between places
 
 The firmware stores its configuration (WiFi networks, MQTT broker URL, ASR service, MIC mode, etc.) in NVS and reads it on boot. You configure all of it through a single web page — **`setup.html`** — which is now hosted online:
 
-> 🌐 **Open the provisioning page:** <https://second-state.github.io/vibekeys_firmware/>
+> 🌐 **Open the provisioning page:** <https://zhubinghui.github.io/vibekeys_firmware/>
 
 This page configures **WiFi** and the **MQTT broker URL** (and the rest of the settings) for this hardware. It talks to the device over **Web Bluetooth (BLE)** — no cable, no app:
 

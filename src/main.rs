@@ -687,6 +687,7 @@ pub fn log_heap() {
 
 fn handle_reset_event(
     setting_arc: &mut Arc<Mutex<(bt_wifi_mode::Setting, esp_idf_svc::nvs::EspDefaultNvs)>>,
+    display: &mut lcd::FrameBuffer,
 ) -> ! {
     let lock = setting_arc.lock().unwrap();
     let png_to_save = if lock.0.background_png.1 {
@@ -708,10 +709,21 @@ fn handle_reset_event(
             Ok(_) => {
                 if lock.1.set_blob("background_png", &png).is_err() {
                     log::error!("Failed to save background PNG");
+                    // 马上就要重启,log 没人看得到;上屏并多留几秒,别让图"静默没生效"。
+                    let _ =
+                        ui::render_keyboard_view(display, false, false, "Background: save failed");
+                    std::thread::sleep(std::time::Duration::from_secs(3));
                 }
             }
             Err(e) => {
                 log::error!("Background PNG failed to decode, not saving it: {e:?}");
+                let _ = ui::render_keyboard_view(
+                    display,
+                    false,
+                    false,
+                    "Background: bad PNG, not saved",
+                );
+                std::thread::sleep(std::time::Duration::from_secs(3));
             }
         }
     }
@@ -780,7 +792,7 @@ async fn keyboard_mode_main(
             // Handle setting events (reset, background-image rejection)
             Some(setting_evt) = setting_rx.recv() => {
                 match setting_evt {
-                    bt_wifi_mode::BTevent::Reset => handle_reset_event(setting_arc),
+                    bt_wifi_mode::BTevent::Reset => handle_reset_event(setting_arc, display),
                     // 上传被拒时给一行提示 —— 否则用户只看到背景图「没生效」,无从判断原因。
                     bt_wifi_mode::BTevent::BackgroundRejected(reason) => {
                         let _ = ui::render_keyboard_view(display, false, false, reason.as_str());
