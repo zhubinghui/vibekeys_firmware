@@ -760,7 +760,16 @@ fn handle_reset_event(
         .decode()
         {
             Ok(_) => {
-                if lock.1.set_blob("background_png", &png).is_err() {
+                if lock.1.set_blob("background_png", &png).is_ok() {
+                    // 重启前给 1 秒确认,用户才知道这一步真的成了。
+                    let _ = ui::render_keyboard_view(
+                        display,
+                        false,
+                        false,
+                        &format!("BG saved: {} B", png.len()),
+                    );
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                } else {
                     log::error!("Failed to save background PNG");
                     // 马上就要重启,log 没人看得到;上屏并多留几秒,别让图"静默没生效"。
                     let _ =
@@ -849,6 +858,15 @@ async fn keyboard_mode_main(
                     // 上传被拒时给一行提示 —— 否则用户只看到背景图「没生效」,无从判断原因。
                     bt_wifi_mode::BTevent::BackgroundRejected(reason) => {
                         let _ = ui::render_keyboard_view(display, false, false, reason.as_str());
+                        continue;
+                    }
+                    bt_wifi_mode::BTevent::BackgroundReceived(n) => {
+                        let _ = ui::render_keyboard_view(
+                            display,
+                            false,
+                            false,
+                            &format!("BG received: {n} B\npress Save Changes"),
+                        );
                         continue;
                     }
                 }

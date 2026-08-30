@@ -184,6 +184,8 @@ pub enum BTevent {
     Reset,
     /// 背景图上传被拒。带上原因,好在设备端直接显示 —— 否则用户只会看到「没生效」。
     BackgroundRejected(crate::png_frame::RejectReason),
+    /// 背景图收全(字节数)。上屏提示用户下一步点 Save Changes,否则图只在内存里。
+    BackgroundReceived(usize),
 }
 
 pub fn new_setting_service(
@@ -341,9 +343,14 @@ pub fn new_setting_service(
                     return;
                 };
                 log::info!("Background PNG received in full, size: {}", image.len());
+                let size = image.len();
                 let mut setting = setting_png.lock().unwrap();
                 // `.1` 表示「有待落盘的新图」,由 handle_reset_event 消费。
                 setting.0.background_png = (image, true);
+                drop(setting);
+                if let Some(tx) = &evt_tx_png {
+                    let _ = tx.blocking_send(BTevent::BackgroundReceived(size));
+                }
             }
             PushOutcome::Rejected(reason) => {
                 log::warn!("Background PNG rejected: {}", reason.as_str());
