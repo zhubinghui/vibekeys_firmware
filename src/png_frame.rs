@@ -21,8 +21,13 @@ const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 /// 以它结尾才算收全 —— 这是真实的结束标记,不是长度启发式。
 const PNG_TRAILER: &[u8] = b"\x00\x00\x00\x00IEND\xaeB`\x82";
 
-/// 背景图大小上限,与 NVS 里能存下的量级对齐。
-pub const MAX_PNG_BYTES: usize = 1024 * 1024;
+/// 背景图大小上限。
+///
+/// 真正的瓶颈是 NVS:单个 blob 上限为 min(508000, 分区的 97.6% − 4KB) —— 本项目 nvs
+/// 分区 2MB,即 508000 字节。上限若设得比它大(旧值 1MB),500KB~1MB 的图能收全、
+/// 能过解码校验,却在 set_blob 时静默失败。480KB 留出余量,让"收不下"在上传阶段
+/// 就被拒掉并反馈,而不是在最后落盘时无声丢失。
+pub const MAX_PNG_BYTES: usize = 480 * 1024;
 
 /// 一次 `push` 之后的状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
