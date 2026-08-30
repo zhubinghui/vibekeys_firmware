@@ -28,6 +28,8 @@ VibeKeys is a Rust firmware for the **ESP32-S3** that turns a piece of custom ha
 
 A **boot menu** always appears at startup with three entries — **Keyboard**, **Remote**, **Setting**. Move with **NEXT** (forward) and **ESC** (back); confirm with **ACCEPT**.
 
+**Back to the menu from any mode**: press **ESC + ACCEPT together** — a confirmation popup appears (ACCEPT = restart into the boot menu, ESC = cancel, auto-cancels after 15 s in Keyboard mode). The first key of the chord still fires its normal action once.
+
 ### Keyboard mode (BLE HID + ASR)
 
 The custom keys act as a Bluetooth keyboard. Default keymap (overridable via keymap config):

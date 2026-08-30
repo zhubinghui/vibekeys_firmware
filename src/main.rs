@@ -690,6 +690,33 @@ pub fn log_heap() {
     }
 }
 
+/// ESC+ACCEPT 组合触发的确认框。阻塞轮询引脚:ACCEPT=重启 / ESC=取消 / 15s 超时=取消。
+/// 先等两键都松开再受理,否则组合里仍按着的 ACCEPT 会被立刻当成确认。
+fn confirm_exit_to_menu(
+    display: &mut lcd::FrameBuffer,
+    key_pins: &bt_keyboard_mode::KeysPin,
+) -> bool {
+    while key_pins.esc.is_low() || key_pins.accept.is_low() {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let mut popup = ui::popup_centered(display.bounding_box());
+    let _ = popup.show(display, "Restart to menu?\nACCEPT=Yes  ESC=No");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let confirmed = loop {
+        if key_pins.accept.is_low() {
+            break true;
+        }
+        if key_pins.esc.is_low() || std::time::Instant::now() > deadline {
+            break false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    if !confirmed {
+        let _ = popup.hide(display);
+    }
+    confirmed
+}
+
 fn handle_reset_event(
     setting_arc: &mut Arc<Mutex<(bt_wifi_mode::Setting, esp_idf_svc::nvs::EspDefaultNvs)>>,
     display: &mut lcd::FrameBuffer,
@@ -983,6 +1010,18 @@ pub async fn handle_key_event(
             let _ = ui::render_keyboard_view(display, wifi_on, true, &text);
         }
         bt_keyboard_mode::ControllerCommand::KeyboardPress(pin_index) => {
+            // ESC+ACCEPT 同按 → 确认后重启回开机菜单。组合里先按下的键已按原语义
+            // 发给了主机,这里补一个释放,避免主机端出现"卡键"。
+            if (pin_index == KeysPin::ESC && key_pins.accept.is_low())
+                || (pin_index == KeysPin::ACCEPT && key_pins.esc.is_low())
+            {
+                keyboard.release();
+                if confirm_exit_to_menu(display, key_pins) {
+                    let _ = ui::render_keyboard_view(display, wifi_on, false, "Restarting...");
+                    esp_idf_svc::hal::reset::restart();
+                }
+                return Ok(());
+            }
             if pin_index == KeysPin::ACCEPT {
                 log::info!("Accept button pressed, starting advertising");
                 let mut adv = ble_device.get_advertising().lock();

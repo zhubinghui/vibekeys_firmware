@@ -23,6 +23,8 @@ pub enum Event {
     Custom,
     SwitchMode,
     NEXT,
+    /// ESC+ACCEPT 同按:确认后重启回开机菜单(模式独占外设,重启是回菜单的正统路径)。
+    ExitChord,
 }
 
 impl std::fmt::Debug for Event {
@@ -39,6 +41,7 @@ impl std::fmt::Debug for Event {
             Event::Custom => write!(f, "Custom"),
             Event::SwitchMode => write!(f, "SwtchMode"),
             Event::NEXT => write!(f, "Next"),
+            Event::ExitChord => write!(f, "ExitChord"),
         }
     }
 }
@@ -302,6 +305,26 @@ pub async fn run(
                         }
                         // else:本页已是最底(尾部 u32 == 0),没有下文 —— 忽略向下滚动。
                     }
+                }
+                Event::ExitChord => {
+                    let _ = popup.show(ui.display_mut(), "Restart to menu?\nACCEPT=Yes  ESC=No");
+                    // 专用小循环等确认:组合键是边沿事件,按住不重发,
+                    // 这里收到的 Accept/Esc 必然是松开后的全新按压。
+                    loop {
+                        match rx.recv().await {
+                            Some(Event::Accept) => {
+                                let _ = popup.show(ui.display_mut(), "Restarting...");
+                                esp_idf_svc::hal::reset::restart();
+                            }
+                            Some(Event::Esc) => {
+                                let _ = popup.hide(ui.display_mut());
+                                break;
+                            }
+                            Some(_) => {}
+                            None => break,
+                        }
+                    }
+                    continue;
                 }
                 Event::Esc => {
                     if asr_editor.is_some() {
@@ -771,6 +794,30 @@ async fn open_session_picker(
                 let _ = send_active_sync(server, false).await;
                 return Ok(());
             }
+            PickerEvt::Key(Event::ExitChord) => {
+                // 与 run() 的确认框同语义:组合是边沿事件,按住不重发,
+                // 收到的 Accept/Esc 必然是松开后的全新按压。
+                let _ = popup.show(ui.display_mut(), "Restart to menu?\nACCEPT=Yes  ESC=No");
+                loop {
+                    match rx.recv().await {
+                        Some(Event::Accept) => {
+                            let _ = popup.show(ui.display_mut(), "Restarting...");
+                            esp_idf_svc::hal::reset::restart();
+                        }
+                        Some(Event::Esc) => {
+                            let _ = popup.hide(ui.display_mut());
+                            // 弹窗盖过列表区域,置空指纹强制下一轮整列表重绘。
+                            last_sig = None;
+                            break;
+                        }
+                        Some(_) => {}
+                        None => {
+                            let _ = send_active_sync(server, false).await;
+                            return Ok(());
+                        }
+                    }
+                }
+            }
             PickerEvt::Key(_) => {} // 旋钮方向 / 其它键在选择器里忽略
             PickerEvt::Mqtt(crate::mqtt::MqttEvent::Presence { .. }) => {
                 let new_labels = server.session_labels();
@@ -1015,12 +1062,21 @@ pub async fn listen_all_keys(
                 if !btn_esc.is_low() {
                     continue
                 }
+                // 另一只键已按住 → 组合;单独的 Esc 不发(先按下的那个键已按原语义发过)。
+                if btn_accept.is_low() {
+                    let _ = tx.send(Event::ExitChord).await;
+                    continue;
+                }
                 let _ = tx.send(Event::Esc).await;
             }
             _ = btn_accept.wait_for_falling_edge() => {
                 tokio::time::sleep(KEY_DEBOUNCE).await;
                 if !btn_accept.is_low() {
                     continue
+                }
+                if btn_esc.is_low() {
+                    let _ = tx.send(Event::ExitChord).await;
+                    continue;
                 }
                 let _ = tx.send(Event::Accept).await;
             }
