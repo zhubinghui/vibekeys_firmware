@@ -18,6 +18,26 @@ env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 jobs:
+  # 宿主单测:src/lib.rs 只暴露不依赖 ESP-IDF 的模块(见其文档注释),所以这里不需要
+  # Xtensa 工具链,普通 stable runner 秒级出结果 —— 不必等 ESP-IDF 编完。
+  # RUSTUP_TOOLCHAIN 用来盖掉 rust-toolchain.toml 里的 `channel = "esp"`。
+  unit-tests:
+    name: Unit tests (host)
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Enable caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: host-tests
+      - name: Run unit tests
+        run: cargo test --lib --target x86_64-unknown-linux-gnu
+
   rust-checks:
     name: Rust Checks
     runs-on: ubuntu-latest
@@ -29,6 +49,13 @@ jobs:
             args: --release
           - command: build
             args: --release --features max2
+          # 不加 --all-targets:bin 的 test target 因 `harness = false` 只剩被剥空的
+          # mod tests 外壳(rustc 无 --test 时会剥掉 #[test] 函数),只会产出假警告。
+          # lib 的测试代码由上面的 unit-tests job 真正编译并执行。
+          - command: clippy
+            args: --release -- -D warnings
+          - command: clippy
+            args: --release --features max2 -- -D warnings
           - command: fmt
             args: --all -- --check --color always
     steps:
