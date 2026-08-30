@@ -6,7 +6,7 @@
 
 use embedded_graphics::{
     image::GetPixel,
-    mono_font::{ascii::FONT_7X13_BOLD, MonoTextStyle},
+    mono_font::{ascii::FONT_9X15_BOLD, MonoTextStyle},
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle, StyledDrawable},
     text::{Alignment, Baseline, LineHeight, Text, TextStyleBuilder},
@@ -17,7 +17,7 @@ use embedded_text::{
     TextBox,
 };
 use u8g2_fonts::{
-    fonts::{u8g2_font_open_iconic_all_1x_t, u8g2_font_wqy12_t_gb2312},
+    fonts::{u8g2_font_open_iconic_all_1x_t, u8g2_font_wqy16_t_gb2312},
     U8g2TextStyle,
 };
 
@@ -25,7 +25,7 @@ use crate::lcd::{ColorFormat, DisplayTargetDrive, FrameBuffer};
 
 type Btn<'a> = &'a mut crate::AnyBtn;
 
-const LINE_H: u32 = 14;
+const LINE_H: u32 = 18; // 16px 字形 + 2px 行距(原 14 配 12px 字)
 
 // ========== 绘制工具 ==========
 
@@ -57,7 +57,7 @@ fn draw_text(
     TextBox::with_textbox_style(
         text,
         rect,
-        MonoTextStyle::new(&FONT_7X13_BOLD, color),
+        MonoTextStyle::new(&FONT_9X15_BOLD, color),
         style,
     )
     .draw(target)?;
@@ -88,7 +88,7 @@ fn draw_text_cjk(
         // 用 lcd::MyTextStyle 而非裸 U8g2TextStyle:u8g2 的文泉驿中文会向上偏 3px,
         // MyTextStyle 的 draw_string 里 position.y += vertical_offset 把它修回来。
         crate::lcd::MyTextStyle {
-            font_style: U8g2TextStyle::new(u8g2_font_wqy12_t_gb2312, color),
+            font_style: U8g2TextStyle::new(u8g2_font_wqy16_t_gb2312, color),
             vertical_offset: 3,
             bg_color: None,
         },
@@ -875,14 +875,14 @@ fn render_password(
     let text_w = Text::new(
         password,
         Point::zero(),
-        MonoTextStyle::new(&FONT_7X13_BOLD, ColorFormat::CSS_WHITE),
+        MonoTextStyle::new(&FONT_9X15_BOLD, ColorFormat::CSS_WHITE),
     )
     .bounding_box()
     .size
     .width;
     fill_rect(
         target,
-        Rectangle::new(Point::new(4 + text_w as i32, 18), Size::new(7, 13)),
+        Rectangle::new(Point::new(4 + text_w as i32, 18), Size::new(9, 15)),
         ColorFormat::CSS_WHITE,
     )?;
     // 字符轮盘:一排字符,中间高亮(= focus),Next 键/旋钮滑动
@@ -1284,7 +1284,7 @@ impl AsrEditor {
             &display,
             content_rect,
             crate::lcd::MyTextStyle {
-                font_style: U8g2TextStyle::new(u8g2_font_wqy12_t_gb2312, ColorFormat::CSS_WHITE),
+                font_style: U8g2TextStyle::new(u8g2_font_wqy16_t_gb2312, ColorFormat::CSS_WHITE),
                 vertical_offset: 3,
                 bg_color: None,
             },
