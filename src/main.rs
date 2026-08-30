@@ -541,10 +541,11 @@ fn main() -> anyhow::Result<()> {
             "Background PNG found in settings, size: {} bytes",
             setting.background_png.0.len()
         );
+        // 背景现在常驻键盘视图(render_keyboard_view 叠加其上),入场不必再停留展示。
         lcd::display_png(
             &mut target,
             setting.background_png.0.as_slice(),
-            std::time::Duration::from_secs(2),
+            std::time::Duration::ZERO,
         )?;
     }
 

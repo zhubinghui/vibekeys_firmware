@@ -414,6 +414,14 @@ impl DisplayTargetDrive for FrameBuffer {
     }
 }
 
+impl FrameBuffer {
+    /// 把画布重置为背景快照(而非纯色)。flush() 之后本就如此;在绘制入口显式调用
+    /// 是为了不依赖「上一次一定 flush 过」的隐式时序。
+    pub fn restore_background(&mut self) {
+        self.buffers.clone_from(&self.background_buffers);
+    }
+}
+
 pub const DEFAULT_BACKGROUND: &[u8] = &[];
 
 pub fn display_png<D: DisplayTargetDrive>(
