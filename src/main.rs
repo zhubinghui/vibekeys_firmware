@@ -514,6 +514,26 @@ fn main() -> anyhow::Result<()> {
             &format!("Keyboard Mode\n {ble_mac}"),
         );
 
+        // 背景图垫底:画一次并快照进背景层,此后 render_keyboard_view 的
+        // restore_background 让它常驻。修复根因:display_png 此前只存在于
+        // Remote 分支 —— Keyboard 模式从未画过背景图,「传了图却全黑」由此而来。
+        // 画失败只记日志:键盘功能不能因为一张图起不来。
+        if !setting.background_png.0.is_empty() {
+            if let Err(e) = lcd::display_png(
+                &mut target,
+                setting.background_png.0.as_slice(),
+                std::time::Duration::ZERO,
+            ) {
+                log::warn!("Background PNG failed to render: {e:?}");
+            }
+            let _ = ui::render_keyboard_view(
+                &mut target,
+                false,
+                false,
+                &format!("Keyboard Mode\n {ble_mac}"),
+            );
+        }
+
         runtime.block_on(keyboard_mode_main(
             &mut target,
             ble_device,
