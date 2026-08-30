@@ -119,6 +119,8 @@ pub fn init_lcd(cs: Gpio12, dc: Gpio13, rst: Gpio14) -> Result<(), EspError> {
         ))?;
         esp!(esp_lcd_panel_disp_on_off(panel, true))?; /* 启动屏幕 */
 
+        // 索引循环而非 iter_mut():对 static mut 取引用是 Rust 2024 禁项,直接按位赋值。
+        #[allow(clippy::needless_range_loop)]
         for i in 0..2 {
             let p =
                 heap_caps_aligned_alloc(64, FLUSH_BAND_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL)
