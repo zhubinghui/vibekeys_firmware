@@ -7,7 +7,7 @@
 VibeKeys 是一套运行在 **ESP32-S3** 上的 Rust 固件,把一块带屏幕、按键和麦克风的定制硬件变成一个多功能的输入设备:
 
 - **蓝牙键盘(BLE HID)** —— 自定义按键直接作为键盘输入,发到手机 / 电脑;
-- **语音输入** —— 按下 MIC 键说话,麦克风音频先经乐鑫 [esp-sr](https://github.com/espressif/esp-sr) 的音频前端(webrtc 降噪 / 自动增益)处理,再以 WAV 流式 HTTP 上传到你配置的 Whisper 服务做识别,返回的文字通过蓝牙键盘"打"进主机;也可关闭内置 ASR,把麦克风透传给主机、用主机自带的听写;
+- **语音输入** —— 按下 MIC 键说话,麦克风原始音频以 WAV 流式 HTTP 上传到你配置的 Whisper 服务做识别(录音上限 30 秒),返回的文字通过蓝牙键盘"打"进主机;也可关闭内置 ASR,把麦克风透传给主机、用主机自带的听写;
 - **远程终端** —— 经 MQTT 连接配套的 vibetty,把屏幕和交互实时共享 / 远程驱动。
 
 ## ⚠️ 升级注意(0.3.x → 0.4.0)
@@ -45,6 +45,8 @@ VibeKeys 是一套运行在 **ESP32-S3** 上的 Rust 固件,把一块带屏幕�
 | 旋钮上转 / 下转 | 鼠标滚轮上 / 下 |
 
 **语音输入(MIC)**:开启「优先内置 ASR」并配置好 ASR 服务后,MIC 触发识别,两种触发风格(在 `setup.html` 设 MIC 模式):**PTT**——按住录音、松开发送;**Toggle**——点按开始 / 再点停止。识别出的文字通过蓝牙键盘打出。
+
+经 `setup.html` 配置的 keymap 覆盖在 Remote 模式同样生效(NEXT / SWITCH / CUSTOM),且 Remote 中 **BACKSPACE 长按连发**。未配置服务器时选 **Remote** 会回退到 Keyboard 模式;Remote 模式下 WiFi 连接失败会停留 60 秒后重启。
 
 ### 远程模式(MQTT → vibetty)
 
@@ -84,11 +86,11 @@ VibeKeys 是一套运行在 **ESP32-S3** 上的 Rust 固件,把一块带屏幕�
 
 **JPEG 模式**:一张 3 屏高的长图让你本地平移;到顶 / 到底时设备向 vibetty 请求上 / 下一页。
 
-**Text 模式**:vt100 终端画布(max2 上 3 屏高、keys 上 5 屏高),增量脏区渲染。旋钮本地平移可见窗口;到画布边缘发 `scroll_up` / `scroll_down` 向 vibetty 要更早 / 更新的历史。delta 帧节流(≤10 次渲染/秒),只刷变化的 cell,高频输出时 UI 保持跟手。
+**Text 模式**:vt100 终端画布(max2 上 3 屏高、keys 上 5 屏高),增量脏区渲染。旋钮本地平移可见窗口;到画布边缘发 `scroll_up` / `scroll_down` 向 vibetty 要更早 / 更新的历史。delta 帧节流(两次渲染间隔 ≥300ms,约 3 次/秒),只刷变化的 cell,高频输出时 UI 保持跟手。
 
 ### 设置(Setting)
 
-从启动菜单进入。选项:**WiFi networks**、**OTA Update**、**Clear config**。用 **NEXT**(子界面里也可用旋钮)移动,**ACCEPT** 选定 / 编辑,**BACKSPACE** 删除,**ESC** 返回。**OTA Update** 同进程进入 OTA 模式(同一固件,不重启到救援固件):连 WiFi 后启动 HTTP server 供浏览器上传,并支持从 GitHub release **download-latest** 下载最新固件。**Clear config** 清空 NVS 并重启。
+从启动菜单进入。选项:**WiFi networks**、**OTA Update**、**Hardware test**(逐键与麦克风交互自检)、**Clear config**。用 **NEXT**(子界面里也可用旋钮)移动,**ACCEPT** 选定 / 编辑,**BACKSPACE** 删除,**ESC** 返回。**OTA Update** 同进程进入 OTA 模式(同一固件,不重启到救援固件):连 WiFi 后启动 HTTP server 供浏览器上传,并支持从 GitHub release **download-latest** 下载最新固件。**Clear config** 清空 NVS 并重启。
 
 ## 多 WiFi(wifi_list)
 
@@ -104,7 +106,7 @@ VibeKeys 是一套运行在 **ESP32-S3** 上的 Rust 固件,把一块带屏幕�
 
 固件的配置(WiFi 列表、MQTT broker URL、ASR 服务、MIC 模式等)存在 NVS,开机时读取。所有配置都通过一个网页 —— **`setup.html`** —— 来设置,现已托管上线:
 
-> 🌐 **打开配网页面:** <https://second-state.github.io/vibekeys_firmware/>
+> 🌐 **打开配网页面:** <https://zhubinghui.github.io/vibekeys_firmware/>
 
 这个页面给本硬件配置 **WiFi** 和 **MQTT broker URL**(以及其余设置)。它通过 **Web Bluetooth(BLE)** 跟设备通信,不用线、不用装 App:
 
@@ -112,7 +114,7 @@ VibeKeys 是一套运行在 **ESP32-S3** 上的 Rust 固件,把一块带屏幕�
 2. 在支持 Web Bluetooth 的浏览器(Chrome / Edge,需 HTTPS)打开上面的配网页面,点 **Connect to VibeKeys**。
 3. 选到设备,填入你的 WiFi 列表、MQTT broker URL、ASR / MIC 等设置并保存 —— 页面会通过 BLE 把配置写进设备,设备存入 NVS。
 
-> 💡 **在列表里找不到设备?** 设备一旦被主机(你的 PC / 手机)作为键盘连上,就会停止 BLE 广播。在设备上按一下 **ACCEPT** 键重新开启 BLE 广播,然后再试一次连接。
+> 💡 **在列表里找不到设备?** 固件在每次连接建立后都会重启广播(最多 5 个并发客户端),但某些状态下 BLE 协议栈仍可能暂停广播。在设备上按一下 **ACCEPT** 键强制重开广播,然后再试一次连接。
 
 设置有变动时随时可以再来配。
 

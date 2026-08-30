@@ -7,7 +7,7 @@ English | [中文](docs/README_zh.md)
 VibeKeys is a Rust firmware for the **ESP32-S3** that turns a piece of custom hardware — screen, keys, and microphone — into a versatile input device:
 
 - **Bluetooth keyboard (BLE HID)** — custom keys act directly as keyboard input to your phone or computer.
-- **Voice input** — press the MIC key and speak; the mic audio is first processed by the [esp-sr](https://github.com/espressif/esp-sr) audio front-end (webrtc noise suppression / auto gain), then streamed as a WAV over HTTP to a Whisper service you configure for recognition; the returned text is "typed" into the host through the Bluetooth keyboard. You can also turn off the built-in ASR and pass the mic through to the host to use the host's own dictation.
+- **Voice input** — press the MIC key and speak; the raw mic audio is streamed as a WAV over HTTP to a Whisper service you configure for recognition (recording hard-stops after 30 s); the returned text is "typed" into the host through the Bluetooth keyboard. You can also turn off the built-in ASR and pass the mic through to the host to use the host's own dictation.
 - **Remote terminal** — connects to the companion **vibetty** over MQTT, sharing / remotely driving the screen and interaction in real time.
 
 ## ⚠️ Upgrade note (0.3.x → 0.4.0)
@@ -45,6 +45,8 @@ The custom keys act as a Bluetooth keyboard. Default keymap (overridable via key
 | Rotary up / down | mouse wheel up / down |
 
 **Voice input (MIC)**: when "prefer built-in ASR" is on and an ASR service is configured, MIC triggers recognition. Two trigger styles (set MIC mode in `setup.html`): **PTT** — hold to record, release to send; **Toggle** — tap to start/stop. The recognized text is typed through the Bluetooth keyboard.
+
+Keymap overrides configured via `setup.html` apply in Remote mode too (NEXT / SWITCH / CUSTOM), and **BACKSPACE auto-repeats** while held there. Selecting **Remote** without a server configured falls back to Keyboard mode; if WiFi fails in Remote mode the device waits 60 s and reboots.
 
 ### Remote mode (MQTT → vibetty)
 
@@ -84,11 +86,11 @@ When you scroll past the edge of the local buffer, the device asks vibetty for t
 
 **JPEG mode**: a tall image buffer (3 screen heights) lets you pan locally; when you reach the top/bottom the device requests the next page from vibetty.
 
-**Text mode**: a vt100 terminal canvas (3 screen heights on max2, 5 on keys) with incremental dirty-rect rendering. The rotary pans the visible window locally; at the canvas edges it sends `scroll_up` / `scroll_down` to vibetty for older/newer history. Delta frames are throttled (≤10 renders/s) and only the changed cells are flushed, keeping the UI responsive during high-frequency output.
+**Text mode**: a vt100 terminal canvas (3 screen heights on max2, 5 on keys) with incremental dirty-rect rendering. The rotary pans the visible window locally; at the canvas edges it sends `scroll_up` / `scroll_down` to vibetty for older/newer history. Delta frames are throttled (≥300 ms between renders, ~3/s) and only the changed cells are flushed, keeping the UI responsive during high-frequency output.
 
 ### Setting
 
-Entered from the boot menu. Options: **WiFi networks**, **OTA Update**, **Clear config**. Move with **NEXT** (or the rotary in sub-screens), pick/edit with **ACCEPT**, delete with **BACKSPACE**, go back with **ESC**. **OTA Update** enters OTA mode in-process (same firmware, no rescue reboot): it connects WiFi, starts an HTTP server for browser upload, and offers a **download-latest** button to fetch the newest firmware from GitHub releases. **Clear config** wipes NVS and reboots.
+Entered from the boot menu. Options: **WiFi networks**, **OTA Update**, **Hardware test** (interactive check of every key and the mic), **Clear config**. Move with **NEXT** (or the rotary in sub-screens), pick/edit with **ACCEPT**, delete with **BACKSPACE**, go back with **ESC**. **OTA Update** enters OTA mode in-process (same firmware, no rescue reboot): it connects WiFi, starts an HTTP server for browser upload, and offers a **download-latest** button to fetch the newest firmware from GitHub releases. **Clear config** wipes NVS and reboots.
 
 ## Multiple WiFi (wifi_list)
 
@@ -98,7 +100,7 @@ The point of a list is **mobility**: so the device can follow you between places
 
 - List order = priority: the first entry whose SSID is visible in the scan wins.
 - Up to **8** credentials are stored in NVS (`MAX_WIFI_CREDS`).
-- Every mode and the OTA rescue firmware share the same list and the same priority logic, so an over-the-air update also connects from wherever you are.
+- Every mode — including in-process OTA — shares the same list and the same priority logic, so an over-the-air update also connects from wherever you are.
 
 ## Setup (web provisioning)
 
@@ -112,7 +114,7 @@ This page configures **WiFi** and the **MQTT broker URL** (and the rest of the s
 2. Open the provisioning page above in a Web-Bluetooth-capable browser (Chrome / Edge, over HTTPS), and click **Connect to VibeKeys**.
 3. Pick the device, fill in your WiFi networks, MQTT broker URL, ASR / MIC settings, etc., and save — the page writes the config to the device over BLE, and the device stores it in NVS.
 
-> 💡 **Can't find the device in the picker?** The device stops BLE advertising once a host (your PC/phone) is already connected to it as a keyboard. Press the **ACCEPT** key on the device to re-start BLE advertising, then try connecting again.
+> 💡 **Can't find the device in the picker?** The firmware restarts advertising after each connection (up to 5 concurrent clients), but the BLE stack may still pause advertising in some states. Press the **ACCEPT** key on the device to force advertising back on, then try connecting again.
 
 You can re-run this any time settings change.
 

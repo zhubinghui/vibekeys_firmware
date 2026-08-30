@@ -453,19 +453,8 @@ pub fn display_png<D: DisplayTargetDrive>(
     Ok(())
 }
 
-#[allow(dead_code)] // 旧 JPEG 路径,现走 new_jpg
-pub fn display_jpeg(jpeg: &[u8]) -> anyhow::Result<()> {
-    let jpeg_buffer = crate::new_jpg::esp_jpeg_decode_one_picture(jpeg)?;
-    log::info!(
-        "JPEG decoded: width={}, height={}",
-        jpeg_buffer.width,
-        jpeg_buffer.height
-    );
-    jpeg_buffer.flush_to_lcd()
-}
-
-// 旧的整屏文本渲染;状态/反馈画面已统一改用 ui::render_keyboard_view,暂留备用。
-#[allow(dead_code)]
+// 整屏文本渲染。键盘/远程模式的状态画面已改用 ui::render_keyboard_view,
+// 但 OTA 模式(ota.rs)仍用它直出文本 —— 不是死代码。
 pub fn display_text(
     display_target: &mut FrameBuffer,
     text: &str,
