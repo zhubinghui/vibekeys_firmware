@@ -8,4 +8,5 @@
 //! 模块的代价可以忽略,换来的是不必把全项目的 `crate::` 路径改写成 `vibekeys::`。
 
 pub mod broker_uri;
+pub mod png_frame;
 pub mod protocol;

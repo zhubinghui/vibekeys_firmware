@@ -24,6 +24,7 @@ mod lcd;
 mod mqtt;
 mod new_jpg;
 mod ota;
+mod png_frame;
 mod protocol;
 mod ui;
 mod util;
@@ -695,8 +696,23 @@ fn handle_reset_event(
     };
 
     if let Some(png) = png_to_save {
-        if lock.1.set_blob("background_png", &png).is_err() {
-            log::error!("Failed to save background PNG");
+        // 落盘前真解码一次。png_frame 已经保证了分片边界正确,这里是最后一道防线:
+        // 一旦坏图写进 NVS,它会在每次进入键盘模式时被读出来渲染 —— 宁可不存。
+        // 这一步只在用户主动 Reset(紧接着就重启)时跑一次,不在任何热路径上。
+        match image::ImageReader::with_format(
+            std::io::Cursor::new(png.as_slice()),
+            image::ImageFormat::Png,
+        )
+        .decode()
+        {
+            Ok(_) => {
+                if lock.1.set_blob("background_png", &png).is_err() {
+                    log::error!("Failed to save background PNG");
+                }
+            }
+            Err(e) => {
+                log::error!("Background PNG failed to decode, not saving it: {e:?}");
+            }
         }
     }
 
@@ -761,9 +777,16 @@ async fn keyboard_mode_main(
     let mut popup = ui::popup_centered(display.bounding_box());
     loop {
         let event = tokio::select! {
-            // Handle setting events (e.g., reset)
-            Some(bt_wifi_mode::BTevent::Reset) = setting_rx.recv() => {
-                handle_reset_event(setting_arc);
+            // Handle setting events (reset, background-image rejection)
+            Some(setting_evt) = setting_rx.recv() => {
+                match setting_evt {
+                    bt_wifi_mode::BTevent::Reset => handle_reset_event(setting_arc),
+                    // 上传被拒时给一行提示 —— 否则用户只看到背景图「没生效」,无从判断原因。
+                    bt_wifi_mode::BTevent::BackgroundRejected(reason) => {
+                        let _ = ui::render_keyboard_view(display, false, false, reason.as_str());
+                        continue;
+                    }
+                }
             }
             // Handle physical key events
             key_evt = bt_keyboard_mode::wait_key_event(key_pins) => key_evt,

@@ -182,6 +182,8 @@ impl Setting {
 
 pub enum BTevent {
     Reset,
+    /// 背景图上传被拒。带上原因,好在设备端直接显示 —— 否则用户只会看到「没生效」。
+    BackgroundRejected(crate::png_frame::RejectReason),
 }
 
 pub fn new_setting_service(
@@ -304,28 +306,42 @@ pub fn new_setting_service(
             }
         });
 
-    let setting_gif = setting.clone();
+    let setting_png = setting.clone();
 
+    // 分片重组交给 png_frame:它以 PNG 签名判定「新传输开始」(从而丢弃上一次的残片),
+    // 以 IEND 块判定「收全」。旧实现用 `len() < 512` 猜结束且从不复位缓冲,导致中断重传
+    // 会把残片和完整文件拼起来当成有效图 —— 那正是把键盘模式变砖的那条路径。
+    let evt_tx_png = evt_tx.clone();
+    let png_acc = Arc::new(Mutex::new(crate::png_frame::PngAccumulator::new()));
     let background_png_characteristic =
         service.create_characteristic(BACKGROUND_PNG_ID, NimbleProperties::WRITE);
     background_png_characteristic.lock().on_write(move |args| {
-        let gif_chunk = args.recv_data();
+        use crate::png_frame::PushOutcome;
 
-        if gif_chunk.len() <= 1024 * 1024 && !gif_chunk.is_empty() {
-            log::info!("New background GIF received, size: {}", gif_chunk.len());
-            let mut setting = setting_gif.lock().unwrap();
-            setting.0.background_png.0.extend_from_slice(gif_chunk);
-            if gif_chunk.len() < 512 {
-                setting.0.background_png.1 = true; // Mark as valid
+        let chunk = args.recv_data();
+        let mut acc = png_acc.lock().unwrap();
+
+        match acc.push(chunk) {
+            PushOutcome::Accumulating => {}
+            PushOutcome::Complete => {
+                let Some(image) = acc.take_image() else {
+                    return;
+                };
+                log::info!("Background PNG received in full, size: {}", image.len());
+                let mut setting = setting_png.lock().unwrap();
+                // `.1` 表示「有待落盘的新图」,由 handle_reset_event 消费。
+                setting.0.background_png = (image, true);
             }
-            if setting.0.background_png.0.len() > 1024 * 1024 {
-                log::warn!("Background GIF size exceeds 1024KB, resetting to default.");
-                setting.0.background_png.0.clear();
-                setting.0.background_png.1 = false;
-                args.reject();
+            PushOutcome::Rejected(reason) => {
+                log::warn!("Background PNG rejected: {}", reason.as_str());
+                if matches!(reason, crate::png_frame::RejectReason::TooLarge) {
+                    args.reject();
+                }
+                if let Some(tx) = &evt_tx_png {
+                    // BLE 回调里不能 panic:通道关了只当没人听。
+                    let _ = tx.blocking_send(BTevent::BackgroundRejected(reason));
+                }
             }
-        } else {
-            log::error!("Failed to parse new background GIF from bytes.");
         }
     });
 
@@ -335,7 +351,8 @@ pub fn new_setting_service(
         let reset_cmd = args.recv_data();
         if reset_cmd == b"RESET" {
             if let Some(tx) = &evt_tx_reset {
-                tx.blocking_send(BTevent::Reset).unwrap();
+                // BLE 回调里不能 panic:通道关了只当没人听。
+                let _ = tx.blocking_send(BTevent::Reset);
             } else {
                 log::info!("Reset command received, but no event handler configured");
             }

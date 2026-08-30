@@ -424,7 +424,10 @@ pub fn display_png<D: DisplayTargetDrive>(
     let img_reader =
         image::ImageReader::with_format(std::io::Cursor::new(png), image::ImageFormat::Png);
 
-    let img = img_reader.decode().unwrap().to_rgb8();
+    // 这里绝不能 unwrap:背景图来自 BLE 上传,坏数据会让 panic_abort 直接重启,
+    // 而坏数据还留在 NVS —— 每次进键盘模式都再炸一次。让错误往上冒即可,
+    // 调用方(main.rs 的键盘模式入口)已经在用 `?`。
+    let img = img_reader.decode()?.to_rgb8();
 
     let p = img.enumerate_pixels().map(|(x, y, p)| {
         Pixel(
