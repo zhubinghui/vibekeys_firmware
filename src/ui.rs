@@ -122,13 +122,6 @@ fn flush(target: &mut FrameBuffer) -> anyhow::Result<()> {
     target.flush()
 }
 
-/// 显示一帧 JPEG 屏幕帧(直接刷 LCD,等价 `lcd::display_jpeg`)。
-/// 放在 ui.rs 便于 app.rs 与 popup 等统一从 `ui::` 调用。
-#[allow(dead_code)] // 旧 JPEG 路径,现走 new_jpg
-pub fn display_jpeg(jpeg: &[u8]) -> anyhow::Result<()> {
-    crate::lcd::display_jpeg(jpeg)
-}
-
 // ========== 开机菜单 ==========
 
 #[derive(Copy, Clone, Eq, PartialEq)]

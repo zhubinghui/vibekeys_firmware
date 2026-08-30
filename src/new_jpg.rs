@@ -93,20 +93,6 @@ impl JpegBufferu16 {
         self.data.as_mut_ptr() as *mut u8
     }
 
-    #[allow(dead_code)] // 旧 LCD 直刷路径,现走 new_jpg 解码链
-    pub fn flush_to_lcd(&self) -> anyhow::Result<()> {
-        let ptr = unsafe {
-            std::slice::from_raw_parts(self.data.as_ptr() as *const u8, self.data.len() * 16)
-        };
-
-        let e = crate::lcd::flush_display(ptr, 0, 0, self.width as i32, self.height as i32);
-        if e != 0 {
-            Err(anyhow::anyhow!("Failed to flush to LCD: error code {}", e))
-        } else {
-            Ok(())
-        }
-    }
-
     pub fn flush_to_lcd_with_offset(
         &self,
         offset_y: usize,

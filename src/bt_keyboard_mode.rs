@@ -1,5 +1,4 @@
 // originally: https://github.com/T-vK/ESP32-BLE-Keyboard
-#![allow(dead_code)]
 
 use esp32_nimble::{
     enums::*,
@@ -13,11 +12,6 @@ use zerocopy::IntoBytes;
 use zerocopy_derive::{Immutable, IntoBytes};
 
 // const uint8_t KEY_TAB = 0xB3;
-// const uint8_t KEY_RETURN = 0xB0;
-// const uint8_t KEY_ESC = 0xB1;
-pub const KEY_RETURN: u8 = 0xb0;
-pub const KEY_ESC: u8 = 0xb1;
-pub const KEY_TAB: u8 = 0xb3;
 
 // Function keys (F1-F12)
 pub const KEY_F1: u8 = 0x3a;
@@ -136,44 +130,6 @@ impl KeymapConfig {
 const KEYBOARD_ID: u8 = 0x01;
 const MEDIA_KEYS_ID: u8 = 0x02;
 const MOUSE_ID: u8 = 0x03;
-
-const HID_KEYBOARD_REPORT_DISCRIPTOR: &[u8] = hid!(
-    (USAGE_PAGE, 0x01), // USAGE_PAGE (Generic Desktop Ctrls)
-    (USAGE, 0x06),      // USAGE (Keyboard)
-    (COLLECTION, 0x01), // COLLECTION (Application)
-    // ------------------------------------------------- Keyboard
-    (REPORT_ID, KEYBOARD_ID), //   REPORT_ID (1)
-    (USAGE_PAGE, 0x07),       //   USAGE_PAGE (Kbrd/Keypad)
-    (USAGE_MINIMUM, 0xE0),    //   USAGE_MINIMUM (0xE0)
-    (USAGE_MAXIMUM, 0xE7),    //   USAGE_MAXIMUM (0xE7)
-    (LOGICAL_MINIMUM, 0x00),  //   LOGICAL_MINIMUM (0)
-    (LOGICAL_MAXIMUM, 0x01),  //   Logical Maximum (1)
-    (REPORT_SIZE, 0x01),      //   REPORT_SIZE (1)
-    (REPORT_COUNT, 0x08),     //   REPORT_COUNT (8)
-    (HIDINPUT, 0x02), //   INPUT (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position)
-    (REPORT_COUNT, 0x01), //   REPORT_COUNT (1) ; 1 byte (Reserved)
-    (REPORT_SIZE, 0x08), //   REPORT_SIZE (8)
-    (HIDINPUT, 0x01), //   INPUT (Const,Array,Abs,No Wrap,Linear,Preferred State,No Null Position)
-    (REPORT_COUNT, 0x05), //   REPORT_COUNT (5) ; 5 bits (Num lock, Caps lock, Scroll lock, Compose, Kana)
-    (REPORT_SIZE, 0x01),  //   REPORT_SIZE (1)
-    (USAGE_PAGE, 0x08),   //   USAGE_PAGE (LEDs)
-    (USAGE_MINIMUM, 0x01), //   USAGE_MINIMUM (0x01) ; Num Lock
-    (USAGE_MAXIMUM, 0x05), //   USAGE_MAXIMUM (0x05) ; Kana
-    (HIDOUTPUT, 0x02), //   OUTPUT (Data,Var,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
-    (REPORT_COUNT, 0x01), //   REPORT_COUNT (1) ; 3 bits (Padding)
-    (REPORT_SIZE, 0x03), //   REPORT_SIZE (3)
-    (HIDOUTPUT, 0x01), //   OUTPUT (Const,Array,Abs,No Wrap,Linear,Preferred State,No Null Position,Non-volatile)
-    (REPORT_COUNT, 0x06), //   REPORT_COUNT (6) ; 6 bytes (Keys)
-    (REPORT_SIZE, 0x08), //   REPORT_SIZE(8)
-    (LOGICAL_MINIMUM, 0x00), //   LOGICAL_MINIMUM(0)
-    (LOGICAL_MAXIMUM, 0x65), //   LOGICAL_MAXIMUM(0x65) ; 101 keys
-    (USAGE_PAGE, 0x07), //   USAGE_PAGE (Kbrd/Keypad)
-    (USAGE_MINIMUM, 0x00), //   USAGE_MINIMUM (0)
-    (USAGE_MAXIMUM, 0x65), //   USAGE_MAXIMUM (0x65)
-    (HIDINPUT, 0x00),  //   INPUT (Data,Array,Abs,No Wrap,Linear,Preferred State,No Null Position)
-    (END_COLLECTION),  // END_COLLECTION
-    (END_COLLECTION)   // END_COLLECTION
-);
 
 const HID_REPORT_DISCRIPTOR: &[u8] = hid!(
     (USAGE_PAGE, 0x01), // USAGE_PAGE (Generic Desktop Ctrls)
@@ -411,26 +367,7 @@ const ASCII_MAP: &[u8] = &[
     0x35 | SHIFT, // ~
     0,            // DEL
 ];
-
-const KEY_MEDIA_NEXT_TRACK: [u8; 2] = [1, 0];
-const KEY_MEDIA_PREVIOUS_TRACK: [u8; 2] = [2, 0];
-const KEY_MEDIA_STOP: [u8; 2] = [4, 0];
-const KEY_MEDIA_PLAY_PAUSE: [u8; 2] = [8, 0];
-const KEY_MEDIA_MUTE: [u8; 2] = [16, 0];
-const KEY_MEDIA_VOLUME_UP: [u8; 2] = [32, 0];
-const KEY_MEDIA_VOLUME_DOWN: [u8; 2] = [64, 0];
-const KEY_MEDIA_WWW_HOME: [u8; 2] = [128, 0];
-const KEY_MEDIA_LOCAL_MACHINE_BROWSER: [u8; 2] = [0, 1]; // Opens "My Computer" on Windows
-const KEY_MEDIA_CALCULATOR: [u8; 2] = [0, 2];
-const KEY_MEDIA_WWW_BOOKMARKS: [u8; 2] = [0, 4];
-const KEY_MEDIA_WWW_SEARCH: [u8; 2] = [0, 8];
-
-const MOUSE_LEFT: u8 = 1;
-const MOUSE_RIGHT: u8 = 2;
-const MOUSE_MIDDLE: u8 = 4;
-const MOUSE_BACK: u8 = 8;
-const MOUSE_FORWARD: u8 = 16;
-const MOUSE_ALL: u8 = MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE | MOUSE_BACK | MOUSE_FORWARD;
+// Opens "My Computer" on Windows
 
 #[derive(IntoBytes, Immutable)]
 #[repr(C, packed)]
@@ -527,90 +464,6 @@ impl KeysPin {
     pub const ROTATE_BUTTON: u8 = 7;
 }
 
-pub async fn key_event(
-    key_pins: &mut KeysPin,
-    rx: &mut tokio::sync::mpsc::Receiver<ControllerCommand>,
-) -> ControllerCommand {
-    tokio::select! {
-        _ = key_pins.mic.wait_for_any_edge() => {
-            if key_pins.mic.is_low() {
-                ControllerCommand::KeyboardPress(KeysPin::MIC)
-            } else {
-                ControllerCommand::KeyboardRelease(KeysPin::MIC)
-            }
-        },
-        _ = key_pins.custom.wait_for_any_edge() => {
-            if key_pins.custom.is_low() {
-                ControllerCommand::KeyboardPress(KeysPin::CUSTOM)
-            } else {
-                ControllerCommand::KeyboardRelease(KeysPin::CUSTOM)
-            }
-        }
-        _ = key_pins.esc.wait_for_any_edge() => {
-            if key_pins.esc.is_low() {
-                log::info!("ESC key pressed");
-                ControllerCommand::KeyboardPress(KeysPin::ESC)
-            } else {
-                log::info!("ESC key released");
-                ControllerCommand::KeyboardRelease(KeysPin::ESC)
-            }
-        },
-        _ = key_pins.next.wait_for_any_edge() => {
-            if key_pins.next.is_low() {
-                ControllerCommand::KeyboardPress(KeysPin::NEXT)
-            } else {
-                ControllerCommand::KeyboardRelease(KeysPin::NEXT)
-            }
-        },
-        _ = key_pins.switch.wait_for_any_edge() => {
-            if key_pins.switch.is_low() {
-                ControllerCommand::KeyboardPress(KeysPin::SWITCH)
-            } else {
-                ControllerCommand::KeyboardRelease(KeysPin::SWITCH)
-            }
-        },
-        _ = key_pins.backspace.wait_for_any_edge() => {
-            if key_pins.backspace.is_low() {
-                ControllerCommand::KeyboardPress(KeysPin::BACKSPACE)
-            } else {
-                ControllerCommand::KeyboardRelease(KeysPin::BACKSPACE)
-            }
-        },
-        _ = key_pins.accept.wait_for_any_edge() => {
-            if key_pins.accept.is_low() {
-                ControllerCommand::KeyboardPress(KeysPin::ACCEPT)
-            } else {
-                ControllerCommand::KeyboardRelease(KeysPin::ACCEPT)
-            }
-        },
-        _ = key_pins.rotate_a.wait_for_any_edge() => {
-            if key_pins.rotate_a.is_high() {
-                if key_pins.rotate_b.is_low() {
-                    ControllerCommand::RotateDown
-                } else {
-                    ControllerCommand::RotateUp
-                }
-            } else {
-                if key_pins.rotate_b.is_low() {
-                    ControllerCommand::RotateUp
-                } else {
-                    ControllerCommand::RotateDown
-                }
-            }
-        },
-        _ = key_pins.rotate_button.wait_for_any_edge() => {
-            if key_pins.rotate_button.is_low() {
-                ControllerCommand::KeyboardPress(KeysPin::ROTATE_BUTTON)
-            } else {
-                ControllerCommand::KeyboardRelease(KeysPin::ROTATE_BUTTON)
-            }
-        },
-        Some(event) = rx.recv() => {
-            event
-        }
-    }
-}
-
 /// Wait for key event only (without ControllerCommand from rx)
 pub async fn wait_key_event(key_pins: &mut KeysPin) -> ControllerCommand {
     tokio::select! {
@@ -698,129 +551,11 @@ pub async fn wait_key_event(key_pins: &mut KeysPin) -> ControllerCommand {
     }
 }
 
-pub struct Keyboard {
-    hid_service_id: BleUuid,
-    input_keyboard: Arc<Mutex<BLECharacteristic>>,
-    output_keyboard: Arc<Mutex<BLECharacteristic>>,
-    key_report: KeyReport,
-}
-
-impl Keyboard {
-    pub fn new(device: &mut BLEDevice, _battery_level: u8) -> anyhow::Result<Self> {
-        device
-            .security()
-            .set_auth(AuthReq::all())
-            .set_io_cap(SecurityIOCap::NoInputNoOutput)
-            .resolve_rpa();
-
-        let server = device.get_server();
-        server.on_connect(|_server, _client| {});
-        let mut hid = BLEHIDDevice::new(server);
-
-        let input_keyboard = hid.input_report(KEYBOARD_ID);
-        let output_keyboard = hid.output_report(KEYBOARD_ID);
-
-        hid.manufacturer("VibeKeys-MAX");
-        hid.pnp(0x02, 0x2E8A, 0x820a, 0x0210);
-        hid.hid_info(0x00, 0x01);
-
-        hid.report_map(HID_KEYBOARD_REPORT_DISCRIPTOR);
-
-        let hid_service_id = hid.hid_service().lock().uuid();
-
-        Ok(Self {
-            hid_service_id,
-            input_keyboard,
-            output_keyboard,
-            key_report: KeyReport {
-                modifiers: 0,
-                reserved: 0,
-                keys: [0; 6],
-            },
-        })
-    }
-
-    pub fn write(&mut self, str: &str) {
-        for char in str.as_bytes() {
-            self.press(*char);
-            self.release();
-        }
-    }
-
-    pub fn ctrl_press(&mut self, char: u8) {
-        self.key_report.modifiers |= 0x01;
-        self.press(char);
-    }
-
-    pub fn r_ctrl_press(&mut self, char: u8) {
-        self.key_report.modifiers |= 0x10;
-        self.press(char);
-    }
-
-    pub fn shift_press(&mut self, char: u8) {
-        self.key_report.modifiers |= 0x02;
-        self.press(char);
-    }
-
-    pub fn r_shift_press(&mut self, char: u8) {
-        self.key_report.modifiers |= 0x20;
-        self.press(char);
-    }
-
-    pub fn alt_press(&mut self, char: u8) {
-        self.key_report.modifiers |= 0x04;
-        self.press(char);
-    }
-
-    pub fn gui_press(&mut self, char: u8) {
-        self.key_report.modifiers |= 0x08;
-        self.press(char);
-    }
-
-    pub fn press(&mut self, char: u8) {
-        if char > ASCII_MAP.len() as u8 {
-            self.key_report.keys[0] = char;
-            self.send_report(&self.key_report);
-            return;
-        }
-
-        let mut key = ASCII_MAP[char as usize];
-        if (key & SHIFT) > 0 {
-            self.key_report.modifiers |= 0x02;
-            key &= !SHIFT;
-        }
-        self.key_report.keys[0] = key;
-        self.send_report(&self.key_report);
-    }
-
-    pub fn press_raw(&mut self, key: u8, modifiers: u8) {
-        self.key_report.modifiers = modifiers;
-        self.key_report.keys[0] = key;
-        self.send_report(&self.key_report);
-    }
-
-    pub fn release(&mut self) {
-        self.key_report.modifiers = 0;
-        self.key_report.keys.fill(0);
-        self.send_report(&self.key_report);
-    }
-
-    fn send_report(&self, keys: &KeyReport) {
-        self.input_keyboard
-            .lock()
-            .set_value(keys.as_bytes())
-            .notify();
-        esp_idf_svc::hal::delay::Ets::delay_ms(7);
-    }
-
-    pub fn hid_service_id(&self) -> BleUuid {
-        self.hid_service_id
-    }
-}
-
 pub struct KeyboardAndMouse {
     hid_service_id: BleUuid,
     input_keyboard: Arc<Mutex<BLECharacteristic>>,
+    /// LED 状态等 output report 的句柄;固件暂不读,但保留以示该 report 存在。
+    #[allow(dead_code)]
     output_keyboard: Arc<Mutex<BLECharacteristic>>,
     input_media_keys: Arc<Mutex<BLECharacteristic>>,
     input_mouse: Arc<Mutex<BLECharacteristic>>,
@@ -908,7 +643,10 @@ impl KeyboardAndMouse {
     }
 
     pub fn press(&mut self, char: u8) {
-        if char > ASCII_MAP.len() as u8 {
+        // ASCII_MAP 共 128 项;守卫必须是 >=,否则字节 0x80(=128)会落到
+        // ASCII_MAP[128] 越界 —— panic_abort 下即整机重启,而触发它只需要
+        // 自定义 keymap 的 Text 里带一个 UTF-8 编码含 0x80 的字符(如「一」)。
+        if char >= ASCII_MAP.len() as u8 {
             self.key_report.keys[0] = char;
             self.send_report(&self.key_report);
             return;
@@ -993,18 +731,20 @@ impl KeyboardAndMouse {
 
 // controller service and characteristic UUIDs
 
-const CONTROLLER_SERVICE_ID: BleUuid = super::bt_wifi_mode::SERVICE_ID;
 const KEYBOARD_DISPLAY_ID: BleUuid = uuid128!("cdaa6472-67a8-4241-93cf-145051608573");
 const KEYBOARD_NOTIFY_ID: BleUuid = uuid128!("d4f7e1b3-3c4d-4f4e-8e2a-8f4e5c6d7e8f");
 const KEYMAP_CONFIG_ID: BleUuid = uuid128!("6f2a291c-0e4d-4f0f-9446-50bcd0b73bb0");
 const KEYMAP_ASR_RESULT_ID: BleUuid = uuid128!("f67f3c25-c9f0-456e-955e-cd9d9dd91051");
 
 pub struct ControllerService {
+    /// 通用通知通道(KEYBOARD_NOTIFY):暂无调用方,与 `notify` 一同保留为宿主推送接口。
+    #[allow(dead_code)]
     pub notify_characteristic: Arc<Mutex<BLECharacteristic>>,
     pub paster_characteristic: Arc<Mutex<BLECharacteristic>>,
 }
 
 impl ControllerService {
+    #[allow(dead_code)] // 见 notify_characteristic 字段注释
     pub fn notify(&self, message: &str) {
         self.notify_characteristic
             .lock()

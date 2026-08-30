@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 // 远程模式 ASR 重构后,AFE 音频管线(AudioWorker::run / afe_worker 等)不再使用
 // (改由 audio::Driver 本地录音直发 Whisper),但保留以备将来复用。
 
@@ -11,10 +10,14 @@ use esp_idf_svc::sys::esp_sr;
 
 pub const SAMPLE_RATE: u32 = 16000;
 
+#[allow(dead_code)] // AFE 管线:见文件头注释,保留以备复用
 pub static mut AFE_LINEAR_GAIN: f32 = 1.5;
+#[allow(dead_code)]
 pub static mut AGC_TARGET_LEVEL_DBFS: i32 = 3;
+#[allow(dead_code)]
 pub static mut AGC_COMPRESSION_GAIN_DB: i32 = 15;
 
+#[allow(dead_code)] // AFE 管线
 unsafe fn afe_init() -> (
     *mut esp_sr::esp_afe_sr_iface_t,
     *mut esp_sr::esp_afe_sr_data_t,
@@ -74,10 +77,12 @@ struct AFE {
 unsafe impl Send for AFE {}
 unsafe impl Sync for AFE {}
 
+#[allow(dead_code)] // AFE 管线
 struct AFEResult {
     data: Vec<i16>,
 }
 
+#[allow(dead_code)] // AFE 管线:整个 impl 随管线闲置
 impl AFE {
     fn new() -> Self {
         unsafe {
@@ -154,6 +159,7 @@ pub type EventRx = tokio::sync::mpsc::Receiver<crate::app::Event>;
 
 pub static MIC_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+#[allow(dead_code)] // AFE 管线
 fn afe_worker(afe_handle: Arc<AFE>, tx: EventTx) -> anyhow::Result<()> {
     log::info!("AFE worker started");
     crate::log_heap();
@@ -204,6 +210,7 @@ fn afe_worker(afe_handle: Arc<AFE>, tx: EventTx) -> anyhow::Result<()> {
     }
 }
 
+#[allow(dead_code)] // AFE 管线
 fn audio_task_run(
     fn_read: &mut dyn FnMut(&mut [i16]) -> Result<usize, esp_idf_svc::sys::EspError>,
     afe_handle: Arc<AFE>,
@@ -267,6 +274,7 @@ pub struct AudioWorker {
 }
 
 impl AudioWorker {
+    #[allow(dead_code)] // AFE 管线
     pub fn run(self, tx: EventTx) -> anyhow::Result<()> {
         let i2s_config = config::StdConfig::new(
             config::Config::default()
