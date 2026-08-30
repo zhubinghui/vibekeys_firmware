@@ -91,6 +91,11 @@ pub fn run(
     }
     if !wifi.is_connected().unwrap_or(false) {
         crate::lcd::display_text(target, "OTA Mode\n Connect wifi Failed\n ESC to back", 0)?;
+        // wait_button_release 只等「松开」,而此刻 ESC 本就没按下 —— 直接返回,
+        // 失败画面只存在 ~20ms,看起来像闪退。先等按下,再等松开。
+        while esc_btn.is_high() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         wait_button_release(esc_btn);
         return Ok(());
     }
