@@ -467,7 +467,7 @@ pub fn display_text(
             embedded_text::style::VerticalOverdraw::FullRowsOnly,
         ))
         .alignment(embedded_text::alignment::HorizontalAlignment::Center)
-        .line_height(embedded_graphics::text::LineHeight::Pixels(14))
+        .line_height(embedded_graphics::text::LineHeight::Pixels(18))
         .build();
 
     embedded_text::TextBox::with_textbox_style(
@@ -475,7 +475,7 @@ pub fn display_text(
         area_box,
         MyTextStyle {
             font_style: U8g2TextStyle::new(
-                u8g2_fonts::fonts::u8g2_font_wqy12_t_gb2312,
+                u8g2_fonts::fonts::u8g2_font_wqy16_t_gb2312,
                 ColorFormat::CSS_WHEAT,
             ),
             vertical_offset: 3,
@@ -905,14 +905,14 @@ impl UI {
                 embedded_text::style::VerticalOverdraw::FullRowsOnly,
             ))
             .alignment(embedded_text::alignment::HorizontalAlignment::Left)
-            .line_height(embedded_graphics::text::LineHeight::Pixels(14))
+            .line_height(embedded_graphics::text::LineHeight::Pixels(18))
             .build();
 
         embedded_text::TextBox::with_textbox_style(
             text,
             text_box,
             MyTextStyle {
-                font_style: U8g2TextStyle::new(u8g2_fonts::fonts::u8g2_font_wqy12_t_gb2312, color),
+                font_style: U8g2TextStyle::new(u8g2_fonts::fonts::u8g2_font_wqy16_t_gb2312, color),
                 vertical_offset: 3,
                 bg_color: None,
             },
