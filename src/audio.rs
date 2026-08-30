@@ -274,7 +274,7 @@ impl AudioWorker {
             let read_buffer_ = unsafe {
                 std::slice::from_raw_parts_mut(
                     read_buffer.as_mut_ptr() as *mut u8,
-                    read_buffer.len() * std::mem::size_of::<i16>(),
+                    std::mem::size_of_val(read_buffer),
                 )
             };
 
@@ -325,7 +325,7 @@ impl AsrConfig {
 
         let json = nvs.get_str("asr_config", &mut buffer).ok()??;
 
-        Self::from_json(&json).ok()
+        Self::from_json(json).ok()
     }
 
     pub fn save_to_nvs(&self, nvs: &esp_idf_svc::nvs::EspDefaultNvs) -> anyhow::Result<()> {
@@ -596,10 +596,10 @@ impl Driver {
         log::info!("ASR response status: {}", resp.status());
         let bytes_read = embedded_svc::utils::io::try_read_full(&mut resp, &mut buffer)
             .map_err(|e| WhisperAttemptError::fatal(e.0))?;
-        let resp_body = std::str::from_utf8(&buffer[..bytes_read])
-            .map_err(|e| WhisperAttemptError::fatal(e))?;
+        let resp_body =
+            std::str::from_utf8(&buffer[..bytes_read]).map_err(WhisperAttemptError::fatal)?;
         let asr_result: AsrResult =
-            serde_json::from_str(resp_body).map_err(|e| WhisperAttemptError::fatal(e))?;
+            serde_json::from_str(resp_body).map_err(WhisperAttemptError::fatal)?;
         if let Some(ref e) = asr_result.error {
             log::error!(
                 "ASR error: {}",

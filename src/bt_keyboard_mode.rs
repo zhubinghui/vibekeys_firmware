@@ -88,7 +88,7 @@ impl KeymapConfig {
         let mut buf = vec![0; keymap_size];
         nvs.get_blob("keymap_config", &mut buf)?;
         let json = String::from_utf8(buf)?;
-        Ok(Self::from_json(&json)?)
+        Self::from_json(&json)
     }
 
     pub fn save_to_nvs(&self, nvs: &mut esp_idf_svc::nvs::EspDefaultNvs) -> anyhow::Result<()> {
@@ -433,7 +433,7 @@ const MOUSE_FORWARD: u8 = 16;
 const MOUSE_ALL: u8 = MOUSE_LEFT | MOUSE_RIGHT | MOUSE_MIDDLE | MOUSE_BACK | MOUSE_FORWARD;
 
 #[derive(IntoBytes, Immutable)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct KeyReport {
     modifiers: u8,
     reserved: u8,
@@ -441,7 +441,7 @@ struct KeyReport {
 }
 
 #[derive(IntoBytes, Immutable)]
-#[repr(packed)]
+#[repr(C, packed)]
 struct MediaKeyReport {
     keys: [u8; 2],
 }
@@ -706,7 +706,7 @@ pub struct Keyboard {
 }
 
 impl Keyboard {
-    pub fn new(device: &mut BLEDevice, battery_level: u8) -> anyhow::Result<Self> {
+    pub fn new(device: &mut BLEDevice, _battery_level: u8) -> anyhow::Result<Self> {
         device
             .security()
             .set_auth(AuthReq::all())
@@ -829,7 +829,7 @@ pub struct KeyboardAndMouse {
 }
 
 impl KeyboardAndMouse {
-    pub fn new(device: &mut BLEDevice, battery_level: u8) -> anyhow::Result<Self> {
+    pub fn new(device: &mut BLEDevice, _battery_level: u8) -> anyhow::Result<Self> {
         device
             .security()
             .set_auth(AuthReq::all())
@@ -1044,7 +1044,7 @@ pub fn new_controller_service(
         log::info!("Wrote to controller display characteristic");
         let data = args.recv_data();
         log::info!("Received data: {:?}", data);
-        let s = String::from_utf8_lossy(&data).to_string();
+        let s = String::from_utf8_lossy(data).to_string();
 
         let _ = tx_.blocking_send(ControllerCommand::DisplayKeyboard(s));
     });
@@ -1073,7 +1073,7 @@ pub fn new_controller_service(
         log::info!("Wrote to keymap config characteristic");
         let data = args.recv_data();
         log::info!("Received keymap data: {:?}", data);
-        let s = String::from_utf8_lossy(&data).to_string();
+        let s = String::from_utf8_lossy(data).to_string();
 
         let _ = tx_.blocking_send(ControllerCommand::KeymapConfig(s));
     });

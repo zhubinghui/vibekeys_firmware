@@ -105,7 +105,7 @@ pub struct ScreenImageChunk {
 // ========== 辅助类型 ==========
 
 /// 图片格式
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageFormat {
     Png,
@@ -199,8 +199,21 @@ impl ClientMessage {
     }
 }
 
+/// 据 magic bytes 判断图片格式。
+pub fn detect_format(data: &[u8]) -> ImageFormat {
+    if data.starts_with(b"\x89PNG") {
+        ImageFormat::Png
+    } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
+        ImageFormat::Jpeg
+    } else {
+        log::warn!("Unknown screen image magic bytes, assuming PNG");
+        ImageFormat::Png
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     #[test]
     fn test_client_pty_input_json() {
         let msg = ClientMessage::pty_input_str("hello");
@@ -314,5 +327,12 @@ mod tests {
             ClientMessage::ScrollDown { rows } => assert_eq!(rows, 0),
             _ => panic!("Wrong message type"),
         }
+    }
+
+    #[test]
+    fn detect_png_jpeg() {
+        assert_eq!(detect_format(b"\x89PNG\r\n\x1a\n"), ImageFormat::Png);
+        assert_eq!(detect_format(&[0xff, 0xd8, 0xff, 0xe0]), ImageFormat::Jpeg);
+        assert_eq!(detect_format(b"garbage"), ImageFormat::Png);
     }
 }

@@ -281,7 +281,7 @@ pub fn new_setting_service(
                 }
                 match serde_json::from_value::<AsrConfig>(base) {
                     Ok(cfg) => {
-                        if let Err(e) = cfg.save_to_nvs(&mut setting.1) {
+                        if let Err(e) = cfg.save_to_nvs(&setting.1) {
                             log::error!("Failed to save asr_config: {:?}", e);
                         }
                     }
@@ -311,7 +311,7 @@ pub fn new_setting_service(
     background_png_characteristic.lock().on_write(move |args| {
         let gif_chunk = args.recv_data();
 
-        if gif_chunk.len() <= 1024 * 1024 && gif_chunk.len() > 0 {
+        if gif_chunk.len() <= 1024 * 1024 && !gif_chunk.is_empty() {
             log::info!("New background GIF received, size: {}", gif_chunk.len());
             let mut setting = setting_gif.lock().unwrap();
             setting.0.background_png.0.extend_from_slice(gif_chunk);
