@@ -252,6 +252,19 @@ pub fn new_setting_service(
                     );
                     list.truncate(MAX_WIFI_CREDS);
                 }
+                // ClientConfiguration 的 SSID/密码是 heapless 定长字段(32/64 字节),
+                // 超限的凭证连不上任何网,只会在 wifi::connect 时报错;入口就拒掉。
+                list.retain(|c| {
+                    let ok = !c.ssid.is_empty() && c.ssid.len() <= 32 && c.pass.len() <= 64;
+                    if !ok {
+                        log::warn!(
+                            "Dropping WiFi cred (ssid {} bytes, pass {} bytes): exceeds 802.11 limits",
+                            c.ssid.len(),
+                            c.pass.len()
+                        );
+                    }
+                    ok
+                });
                 setting.0.wifi_list = list;
                 // 经 MutexGuard 的 Deref,先 clone 再写 NVS,避免同时借 guard。
                 let l = setting.0.wifi_list.clone();

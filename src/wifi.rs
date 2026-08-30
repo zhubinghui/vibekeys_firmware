@@ -22,12 +22,15 @@ pub fn connect(
 
     wifi.set_configuration(&esp_idf_svc::wifi::Configuration::Client(
         esp_idf_svc::wifi::ClientConfiguration {
-            ssid: ssid
-                .try_into()
-                .expect("Could not parse the given SSID into WiFi config"),
-            password: pass
-                .try_into()
-                .expect("Could not parse the given password into WiFi config"),
+            // SSID/密码是 heapless 定长字段(32/64 字节),而输入来自用户配置(BLE 写入,
+            // 中文密码 22 个汉字即超 64)。这里 panic 会在 panic_abort 下整机重启,且坏配置
+            // 留在 NVS 里,每次进模式都重演 —— 转成 Err,调用方本就把连接失败当 WiFi off 处理。
+            ssid: ssid.try_into().map_err(|_| {
+                anyhow::anyhow!("SSID too long for 802.11 ({} bytes, max 32)", ssid.len())
+            })?,
+            password: pass.try_into().map_err(|_| {
+                anyhow::anyhow!("WiFi password too long ({} bytes, max 64)", pass.len())
+            })?,
             auth_method,
             ..Default::default()
         },
