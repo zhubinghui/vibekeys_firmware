@@ -414,6 +414,14 @@ impl DisplayTargetDrive for FrameBuffer {
     }
 }
 
+impl FrameBuffer {
+    /// 把画布重置为背景快照(而非纯色)。flush() 之后本就如此;在绘制入口显式调用
+    /// 是为了不依赖「上一次一定 flush 过」的隐式时序。
+    pub fn restore_background(&mut self) {
+        self.buffers.clone_from(&self.background_buffers);
+    }
+}
+
 pub const DEFAULT_BACKGROUND: &[u8] = &[];
 
 pub fn display_png<D: DisplayTargetDrive>(
@@ -429,9 +437,15 @@ pub fn display_png<D: DisplayTargetDrive>(
     // 调用方(main.rs 的键盘模式入口)已经在用 `?`。
     let img = img_reader.decode()?.to_rgb8();
 
+    // 居中绘制:小图上下/左右补黑边,大图居中裁切 —— 任何尺寸都可预期地"整张"呈现,
+    // 而不是钉死左上角。先整体清黑,黑边才干净(随后 fix_background 会连黑边一起快照)。
+    display_target.fill_color(ColorFormat::CSS_BLACK)?;
+    let dx = (DISPLAY_WIDTH as i32 - img.width() as i32) / 2;
+    let dy = (DISPLAY_HEIGHT as i32 - img.height() as i32) / 2;
+
     let p = img.enumerate_pixels().map(|(x, y, p)| {
         Pixel(
-            Point::new(x as i32, y as i32),
+            Point::new(x as i32 + dx, y as i32 + dy),
             ColorFormat::new(
                 p[0] / (u8::MAX / ColorFormat::MAX_R),
                 p[1] / (u8::MAX / ColorFormat::MAX_G),

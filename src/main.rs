@@ -514,6 +514,26 @@ fn main() -> anyhow::Result<()> {
             &format!("Keyboard Mode\n {ble_mac}"),
         );
 
+        // 背景图垫底:画一次并快照进背景层,此后 render_keyboard_view 的
+        // restore_background 让它常驻。修复根因:display_png 此前只存在于
+        // Remote 分支 —— Keyboard 模式从未画过背景图,「传了图却全黑」由此而来。
+        // 画失败只记日志:键盘功能不能因为一张图起不来。
+        if !setting.background_png.0.is_empty() {
+            if let Err(e) = lcd::display_png(
+                &mut target,
+                setting.background_png.0.as_slice(),
+                std::time::Duration::ZERO,
+            ) {
+                log::warn!("Background PNG failed to render: {e:?}");
+            }
+            let _ = ui::render_keyboard_view(
+                &mut target,
+                false,
+                false,
+                &format!("Keyboard Mode\n {ble_mac}"),
+            );
+        }
+
         runtime.block_on(keyboard_mode_main(
             &mut target,
             ble_device,
@@ -541,10 +561,11 @@ fn main() -> anyhow::Result<()> {
             "Background PNG found in settings, size: {} bytes",
             setting.background_png.0.len()
         );
+        // 背景现在常驻键盘视图(render_keyboard_view 叠加其上),入场不必再停留展示。
         lcd::display_png(
             &mut target,
             setting.background_png.0.as_slice(),
-            std::time::Duration::from_secs(2),
+            std::time::Duration::ZERO,
         )?;
     }
 
@@ -739,7 +760,16 @@ fn handle_reset_event(
         .decode()
         {
             Ok(_) => {
-                if lock.1.set_blob("background_png", &png).is_err() {
+                if lock.1.set_blob("background_png", &png).is_ok() {
+                    // 重启前给 1 秒确认,用户才知道这一步真的成了。
+                    let _ = ui::render_keyboard_view(
+                        display,
+                        false,
+                        false,
+                        &format!("BG saved: {} B", png.len()),
+                    );
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                } else {
                     log::error!("Failed to save background PNG");
                     // 马上就要重启,log 没人看得到;上屏并多留几秒,别让图"静默没生效"。
                     let _ =
@@ -828,6 +858,15 @@ async fn keyboard_mode_main(
                     // 上传被拒时给一行提示 —— 否则用户只看到背景图「没生效」,无从判断原因。
                     bt_wifi_mode::BTevent::BackgroundRejected(reason) => {
                         let _ = ui::render_keyboard_view(display, false, false, reason.as_str());
+                        continue;
+                    }
+                    bt_wifi_mode::BTevent::BackgroundReceived(n) => {
+                        let _ = ui::render_keyboard_view(
+                            display,
+                            false,
+                            false,
+                            &format!("BG received: {n} B\npress Save Changes"),
+                        );
                         continue;
                     }
                 }

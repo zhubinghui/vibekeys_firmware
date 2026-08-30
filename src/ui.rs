@@ -6,7 +6,7 @@
 
 use embedded_graphics::{
     image::GetPixel,
-    mono_font::{ascii::FONT_9X15_BOLD, MonoTextStyle},
+    mono_font::{ascii::FONT_9X15_BOLD, MonoTextStyle, MonoTextStyleBuilder},
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle, StyledDrawable},
     text::{Alignment, Baseline, LineHeight, Text, TextStyleBuilder},
@@ -990,21 +990,32 @@ pub fn render_keyboard_view(
     feedback: &str,
 ) -> anyhow::Result<()> {
     let bb = target.bounding_box();
-    clear(target, ColorFormat::CSS_BLACK)?;
+    // 不再 clear 成纯黑:画布重置为背景快照(用户上传的背景图,无图时即纯黑),
+    // 状态栏与文字叠加其上 —— 背景图因此在整个键盘模式期间常驻,而非入场闪 2 秒。
+    target.restore_background();
     draw_status_bar(target, wifi_on, Some(ble_on))?;
     let anim = Rectangle::new(
         Point::new(0, STATUS_H as i32),
         Size::new(bb.size.width, bb.size.height.saturating_sub(STATUS_H)),
     );
     if !feedback.is_empty() {
-        draw_text(
-            target,
+        // 字符级底色(只垫字形格,不盖整块矩形):背景图上保证可读,又尽量露出图。
+        let style = TextBoxStyleBuilder::new()
+            .alignment(HorizontalAlignment::Center)
+            .height_mode(HeightMode::ShrinkToText(VerticalOverdraw::FullRowsOnly))
+            .line_height(LineHeight::Pixels(LINE_H))
+            .build();
+        TextBox::with_textbox_style(
             feedback,
             anim,
-            ColorFormat::CSS_WHITE,
-            None,
-            HorizontalAlignment::Center,
-        )?;
+            MonoTextStyleBuilder::new()
+                .font(&FONT_9X15_BOLD)
+                .text_color(ColorFormat::CSS_WHITE)
+                .background_color(ColorFormat::CSS_BLACK)
+                .build(),
+            style,
+        )
+        .draw(target)?;
     }
     flush(target)
 }
