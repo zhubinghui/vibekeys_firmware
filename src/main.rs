@@ -543,6 +543,15 @@ fn main() -> anyhow::Result<()> {
             &format!("Keyboard Mode\n {ble_mac}"),
         );
 
+        // 主屏信息行用:实际连上的 SSID(未连 WiFi 则空)。
+        let picked_ssid = if wifi_on {
+            bt_wifi_mode::pick_cred(&scan_list, &setting.wifi_list)
+                .map(|c| c.ssid.clone())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+
         runtime.block_on(keyboard_mode_main(
             &mut target,
             ble_device,
@@ -556,6 +565,7 @@ fn main() -> anyhow::Result<()> {
             asr_config,
             controller,
             wifi_on,
+            &picked_ssid,
             &ble_mac.to_string(),
         ));
     }
@@ -866,14 +876,26 @@ async fn keyboard_mode_main(
     asr_config: Option<audio::AsrConfig>,
     controller: bt_keyboard_mode::ControllerService,
     wifi_on: bool,
+    ssid: &str,
     ble_mac: &str,
 ) -> ! {
-    let _ = ui::render_keyboard_view(
-        display,
-        true,
-        ble_device.get_server().connected_count() > 0,
-        &format!("Keyboard\n {ble_mac}"),
-    );
+    let has_asr = driver.is_some() && asr_config.is_some();
+    {
+        let lock = setting_arc.lock().unwrap();
+        let _ = ui::render_keyboard_home(
+            display,
+            &ui::KeyboardHome {
+                wifi_on,
+                ssid,
+                ble_conns: ble_device.get_server().connected_count(),
+                asr_on: has_asr,
+                asr_builtin: lock.0.prefer_builtin_asr,
+                mic_toggle: lock.0.mic_model == 1,
+                ble_mac,
+                show_exit_hint: true,
+            },
+        );
+    }
     let mut popup = ui::popup_centered(display.bounding_box());
     loop {
         let event = tokio::select! {

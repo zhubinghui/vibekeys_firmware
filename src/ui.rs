@@ -1136,6 +1136,147 @@ pub fn render_keyboard_view(
     flush(target)
 }
 
+/// 键盘模式稳态主屏的数据(按 MIC 前用户想确认的事)。
+pub struct KeyboardHome<'a> {
+    pub wifi_on: bool,
+    /// 已连接的 SSID;未连接传 ""(显示 "no wifi")。
+    pub ssid: &'a str,
+    /// BLE 已连接主机数。
+    pub ble_conns: usize,
+    /// 本地 ASR 可用(driver + config 齐备)。
+    pub asr_on: bool,
+    /// true = 内置 Whisper;false = MIC 透传主机听写。
+    pub asr_builtin: bool,
+    /// true = Toggle(按一下开/关);false = PushToTalk。
+    pub mic_toggle: bool,
+    pub ble_mac: &'a str,
+    /// 入场首帧显示一次 "ESC+ACCEPT = menu" 提示。
+    pub show_exit_hint: bool,
+}
+
+/// 状态栏高度(render_keyboard_home 专用,= LINE_H,文字不越界)。
+const STATUS2_H: u32 = 18;
+
+/// 键盘模式稳态主屏:四槽状态栏(WiFi/BLE·n/MQTT/ASR + 版本号)+ 居中标识
+/// + 信息行(SSID / ASR 路径 / MIC 模式)。矮屏(keys)省略信息行与提示。
+pub fn render_keyboard_home(target: &mut FrameBuffer, h: &KeyboardHome) -> anyhow::Result<()> {
+    let bb = target.bounding_box();
+    let (width, height) = (bb.size.width, bb.size.height);
+    target.restore_background();
+    fill_rect(
+        target,
+        Rectangle::new(Point::new(0, 0), Size::new(width, STATUS2_H)),
+        ColorFormat::CSS_DARK_SLATE_GRAY,
+    )?;
+    let ble_text = format!("BLE:{}", h.ble_conns);
+    // (标签, 圆点颜色):绿=已连,蓝=BLE 有连接,灰=关/不适用。键盘模式无 MQTT,恒灰。
+    let slots: [(&str, ColorFormat); 4] = [
+        (
+            "WiFi",
+            if h.wifi_on {
+                ColorFormat::CSS_GREEN
+            } else {
+                ColorFormat::CSS_GRAY
+            },
+        ),
+        (
+            &ble_text,
+            if h.ble_conns > 0 {
+                ColorFormat::CSS_DODGER_BLUE
+            } else {
+                ColorFormat::CSS_GRAY
+            },
+        ),
+        ("MQTT", ColorFormat::CSS_GRAY),
+        (
+            "ASR",
+            if h.asr_on {
+                ColorFormat::CSS_GREEN
+            } else {
+                ColorFormat::CSS_GRAY
+            },
+        ),
+    ];
+    let mut x: i32 = 4;
+    for (label, dot) in slots {
+        fill_rect(
+            target,
+            Rectangle::new(Point::new(x, 6), Size::new(6, 6)),
+            dot,
+        )?;
+        let lw = (label.len() as u32) * 8 + 4;
+        draw_text(
+            target,
+            label,
+            Rectangle::new(Point::new(x + 9, 0), Size::new(lw, STATUS2_H)),
+            ColorFormat::CSS_WHITE,
+            None,
+            HorizontalAlignment::Left,
+        )?;
+        x += 9 + lw as i32 + 6;
+    }
+    draw_text(
+        target,
+        concat!("v", env!("CARGO_PKG_VERSION")),
+        Rectangle::new(Point::new(width as i32 - 60, 0), Size::new(56, STATUS2_H)),
+        ColorFormat::CSS_GRAY,
+        None,
+        HorizontalAlignment::Right,
+    )?;
+    // 居中标识
+    draw_text(
+        target,
+        &format!("Keyboard\n{}", h.ble_mac),
+        Rectangle::new(
+            Point::new(0, (height / 2) as i32 - LINE_H as i32),
+            Size::new(width, LINE_H * 2 + 4),
+        ),
+        ColorFormat::CSS_WHITE,
+        None,
+        HorizontalAlignment::Center,
+    )?;
+    // 信息行 + 一次性退出提示(矮屏放不下,跳过)。
+    if height >= 150 {
+        let info = format!(
+            "{}  ASR:{}  MIC:{}",
+            if h.ssid.is_empty() { "no wifi" } else { h.ssid },
+            if !h.asr_on {
+                "off"
+            } else if h.asr_builtin {
+                "builtin"
+            } else {
+                "host"
+            },
+            if h.mic_toggle { "TOG" } else { "PTT" },
+        );
+        draw_text(
+            target,
+            &info,
+            Rectangle::new(
+                Point::new(4, height as i32 - 46),
+                Size::new(width - 8, LINE_H + 2),
+            ),
+            ColorFormat::CSS_WHEAT,
+            None,
+            HorizontalAlignment::Left,
+        )?;
+        if h.show_exit_hint {
+            draw_text(
+                target,
+                "ESC+ACCEPT = menu",
+                Rectangle::new(
+                    Point::new(4, height as i32 - 22),
+                    Size::new(width - 8, LINE_H + 2),
+                ),
+                ColorFormat::CSS_GRAY,
+                None,
+                HorizontalAlignment::Center,
+            )?;
+        }
+    }
+    flush(target)
+}
+
 /// Remote 模式视图:stop 显示占位提示,working 显示动画占位。
 /// (working 时实际屏幕由 app::run 的 ui.handle_message 显示 vibetty 实时画面覆盖。)
 pub fn render_remote_view(target: &mut FrameBuffer, working: bool) -> anyhow::Result<()> {
