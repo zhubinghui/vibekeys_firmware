@@ -1188,7 +1188,10 @@ pub fn render_ota_progress(
     let bar_w = width.saturating_sub(40);
     let bar_y = (height as i32) / 2 - 16;
     let bar = Rectangle::new(Point::new(20, bar_y), Size::new(bar_w, 14));
-    bar.draw_styled(&PrimitiveStyle::with_stroke(ColorFormat::CSS_WHITE, 1), target)?;
+    bar.draw_styled(
+        &PrimitiveStyle::with_stroke(ColorFormat::CSS_WHITE, 1),
+        target,
+    )?;
     let known_total = total.filter(|t| *t > 0);
     if let Some(t) = known_total {
         let inner_w = bar_w.saturating_sub(4) as usize;
@@ -1211,10 +1214,7 @@ pub fn render_ota_progress(
     draw_text(
         target,
         &line,
-        Rectangle::new(
-            Point::new(4, bar_y + 20),
-            Size::new(width - 8, LINE_H + 2),
-        ),
+        Rectangle::new(Point::new(4, bar_y + 20), Size::new(width - 8, LINE_H + 2)),
         ColorFormat::CSS_WHITE,
         None,
         HorizontalAlignment::Center,
@@ -1223,10 +1223,7 @@ pub fn render_ota_progress(
         draw_text(
             target,
             phase,
-            Rectangle::new(
-                Point::new(4, bar_y + 42),
-                Size::new(width - 8, LINE_H + 2),
-            ),
+            Rectangle::new(Point::new(4, bar_y + 42), Size::new(width - 8, LINE_H + 2)),
             ColorFormat::CSS_GRAY,
             None,
             HorizontalAlignment::Center,
