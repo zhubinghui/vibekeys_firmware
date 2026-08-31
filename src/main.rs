@@ -565,21 +565,56 @@ fn main() -> anyhow::Result<()> {
     let _ = ui::render_keyboard_view(&mut target, false, false, "Connecting the WiFi...");
 
     // 用 boot 阶段的扫描结果与已配置 wifi_list 匹配,挑当前在范围内的网络连接。
-    let r = match bt_wifi_mode::pick_cred(&scan_list, &setting.wifi_list) {
-        Some(c) => wifi::connect(&mut wifi, &c.ssid, &c.pass, sysloop.clone()),
-        None => {
-            log::error!(
-                "No known WiFi network in range (scan_list has {})",
-                scan_list.len()
-            );
-            anyhow::Result::<()>::Err(anyhow::anyhow!("no known network in range"))
+    // 失败不再「睡 60s 强制重启」:红框弹窗给出路 —— ACCEPT=重试,ESC=重启回菜单。
+    loop {
+        let picked = bt_wifi_mode::pick_cred(&scan_list, &setting.wifi_list);
+        let ssid_disp = picked
+            .as_ref()
+            .map(|c| c.ssid.clone())
+            .unwrap_or_else(|| "no known WiFi".to_string());
+        let r = match picked {
+            Some(c) => wifi::connect(&mut wifi, &c.ssid, &c.pass, sysloop.clone()),
+            None => {
+                log::error!(
+                    "No known WiFi network in range (scan_list has {})",
+                    scan_list.len()
+                );
+                Err(anyhow::anyhow!("no known network in range"))
+            }
+        };
+        match r {
+            Ok(()) => break,
+            Err(e) => {
+                log::error!("Failed to connect to WiFi: {:?}", e);
+                // ssid 截短:弹窗 36px 高只容两行,长 ssid 换行会挤掉操作提示。
+                let ssid_short: String = if ssid_disp.chars().count() > 12 {
+                    let mut s: String = ssid_disp.chars().take(11).collect();
+                    s.push_str("..");
+                    s
+                } else {
+                    ssid_disp
+                };
+                let mut popup = ui::popup_centered(target.bounding_box());
+                let _ = popup.show_with_border(
+                    &mut target,
+                    &format!("WiFi failed: {ssid_short}\nACCEPT=retry  ESC=menu"),
+                    lcd::ColorFormat::CSS_RED,
+                );
+                // 此时按键线程尚未 spawn,btn3/btn7 仍归本作用域,阻塞轮询即可。
+                loop {
+                    if btn7.is_low() {
+                        wait_button_release(&btn7);
+                        break;
+                    }
+                    if btn3.is_low() {
+                        wait_button_release(&btn3);
+                        esp_idf_svc::hal::reset::restart();
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                let _ = popup.hide(&mut target);
+            }
         }
-    };
-    if r.is_err() {
-        log::error!("Failed to connect to WiFi: {:?}", r.err());
-        let _ = ui::render_keyboard_view(&mut target, false, false, " WiFi connection failed\n");
-        std::thread::sleep(std::time::Duration::from_secs(60));
-        esp_idf_svc::hal::reset::restart();
     }
 
     if setting.server_url.starts_with("mqtts")
