@@ -889,7 +889,7 @@ async fn keyboard_mode_main(
                         match driver.start_asr(
                             asr_config,
                             || {
-                                let _ = popup.show(display, "recording...");
+                                let _ = popup.show_with_border(display, "recording...", crate::lcd::ColorFormat::CSS_GREEN);
                             },
                             || key_pins.mic.is_high(),
                         ) {
@@ -899,7 +899,7 @@ async fn keyboard_mode_main(
                             }
                             Err(e) => {
                                 log::error!("ASR error: {:?}", e);
-                                let _ = popup.show(display, "ASR error");
+                                let _ = popup.show_with_border(display, "ASR error", crate::lcd::ColorFormat::CSS_RED);
                             }
                         }
                     }
@@ -912,7 +912,7 @@ async fn keyboard_mode_main(
                         match driver.start_asr(
                             asr_config,
                             || {
-                                let _ = popup.show(display, "recording...");
+                                let _ = popup.show_with_border(display, "recording...", crate::lcd::ColorFormat::CSS_GREEN);
                             },
                             || {
                                 if key_pins.mic.is_low() {
@@ -932,7 +932,7 @@ async fn keyboard_mode_main(
                             }
                             Err(e) => {
                                 log::error!("ASR error: {:?}", e);
-                                let _ = popup.show(display, "ASR error");
+                                let _ = popup.show_with_border(display, "ASR error", crate::lcd::ColorFormat::CSS_RED);
                             }
                         }
                     }

@@ -193,7 +193,7 @@ pub async fn run(
         // 弹窗收敛:在线则关闭上一轮瞬态弹窗;断线则(重新)显示「下线」弹窗,
         // 让它在无事件期间也持续保持(断线时不会有 MQTT 事件来触发重绘)。
         if disconnected {
-            let _ = popup.show(ui.display_mut(), "MQTT disconnected");
+            let _ = popup.show_with_border(ui.display_mut(), "MQTT disconnected", ColorFormat::CSS_RED);
         } else {
             let _ = popup.hide(ui.display_mut());
         }
@@ -222,7 +222,7 @@ pub async fn run(
                                 if pending_scroll.is_none() {
                                     pending_scroll = Some(PendingScroll::Up);
                                     pending_since = Some(std::time::Instant::now());
-                                    let _ = popup.show(ui.display_mut(), "loading...");
+                                    let _ = popup.show_with_border(ui.display_mut(), "loading...", ColorFormat::CSS_YELLOW);
                                     server
                                         .send(protocol::ClientMessage::ScrollUp { rows: 0 })
                                         .await?;
@@ -246,7 +246,7 @@ pub async fn run(
                         if pending_scroll.is_none() {
                             pending_scroll = Some(PendingScroll::Up);
                             pending_since = Some(std::time::Instant::now());
-                            let _ = popup.show(ui.display_mut(), "loading...");
+                            let _ = popup.show_with_border(ui.display_mut(), "loading...", ColorFormat::CSS_YELLOW);
                             server
                                 .send(protocol::ClientMessage::ScrollUp { rows: 0 })
                                 .await?;
@@ -267,7 +267,7 @@ pub async fn run(
                                 if pending_scroll.is_none() {
                                     pending_scroll = Some(PendingScroll::Down);
                                     pending_since = Some(std::time::Instant::now());
-                                    let _ = popup.show(ui.display_mut(), "loading...");
+                                    let _ = popup.show_with_border(ui.display_mut(), "loading...", ColorFormat::CSS_YELLOW);
                                     server
                                         .send(protocol::ClientMessage::ScrollDown { rows: 0 })
                                         .await?;
@@ -297,7 +297,7 @@ pub async fn run(
                             if pending_scroll.is_none() {
                                 pending_scroll = Some(PendingScroll::Down);
                                 pending_since = Some(std::time::Instant::now());
-                                let _ = popup.show(ui.display_mut(), "loading...");
+                                let _ = popup.show_with_border(ui.display_mut(), "loading...", ColorFormat::CSS_YELLOW);
                                 server
                                     .send(protocol::ClientMessage::ScrollDown { rows: 0 })
                                     .await?;
@@ -541,7 +541,7 @@ pub async fn run(
                     pending_scroll = None;
                     pending_since = None;
                     disconnected = true;
-                    let _ = popup.show(ui.display_mut(), "MQTT disconnected");
+                    let _ = popup.show_with_border(ui.display_mut(), "MQTT disconnected", ColorFormat::CSS_RED);
                 }
                 crate::mqtt::MqttEvent::Reconnected => {
                     log::info!("MQTT reconnected; subscriptions restored");
@@ -587,7 +587,7 @@ pub async fn run(
                 };
                 if asr_tx.send(req).is_err() {
                     // worker 线程没起来 / 已退出。
-                    let _ = popup.show(ui.display_mut(), "ASR unavailable");
+                    let _ = popup.show_with_border(ui.display_mut(), "ASR unavailable", ColorFormat::CSS_RED);
                     let _ = mic_btn.wait_for_high().await;
                     continue;
                 }
@@ -654,7 +654,7 @@ pub async fn run(
                     }
                     Err(e) => {
                         log::error!("Local ASR error: {e:?}");
-                        let _ = popup.show(ui.display_mut(), "ASR error");
+                        let _ = popup.show_with_border(ui.display_mut(), "ASR error", ColorFormat::CSS_RED);
                     }
                 }
             }
