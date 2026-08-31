@@ -95,6 +95,37 @@ fn flush(target: &mut FrameBuffer) -> anyhow::Result<()> {
     target.flush()
 }
 
+/// 右缘滚动条:`total > visible` 时画 3px 轨道 + 按比例青色滑块,否则不画。
+/// `top` = 列表区顶部 y(轨道从这里到屏底)。
+fn draw_scrollbar(
+    target: &mut FrameBuffer,
+    top: i32,
+    total: usize,
+    start: usize,
+    visible: usize,
+) -> anyhow::Result<()> {
+    if total <= visible {
+        return Ok(());
+    }
+    let bb = target.bounding_box();
+    let x = bb.size.width as i32 - 3;
+    let h = bb.size.height as i32 - top;
+    fill_rect(
+        target,
+        Rectangle::new(Point::new(x, top), Size::new(3, h as u32)),
+        ColorFormat::CSS_DARK_SLATE_GRAY,
+    )?;
+    let thumb_h = ((h as usize) * visible / total).max(8) as u32;
+    let max_start = total - visible;
+    let thumb_y =
+        top + (h - thumb_h as i32) * (start.min(max_start) as i32) / (max_start as i32).max(1);
+    fill_rect(
+        target,
+        Rectangle::new(Point::new(x, thumb_y), Size::new(3, thumb_h)),
+        ColorFormat::CSS_DARK_CYAN,
+    )
+}
+
 // ========== 开机菜单 ==========
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -817,12 +848,12 @@ pub fn render_list(
             )?;
         }
     }
+    draw_scrollbar(target, start_y, items.len(), start, visible)?;
     flush(target)
 }
 
-/// session 列表:蓝底 = 选中(焦点);文字色 = working 白 / waiting(非 working)橙。
-/// 与通用 render_list 不同 —— 这里底色表示焦点、文字色表示 working 状态,二者正交
-/// (故不复用 render_list 的青色焦点底色)。条目用文泉驿字体(支持中文标题)。
+/// session 列表:青底 = 选中(焦点,与其它列表统一);状态用 ●/○ 前缀 + 文字色双编码
+/// (● working 白 / ○ waiting 橙),色弱也能靠形状分辨。条目用文泉驿字体(支持中文标题)。
 pub fn render_session_list(
     target: &mut FrameBuffer,
     title: &str,
@@ -857,9 +888,9 @@ pub fn render_session_list(
             Size::new(width, item_h),
         );
         let is_focus = i == focus;
-        // 蓝底 = 选中(焦点);文字色 = working 白 / waiting(非 working)橙。二者正交。
+        // 青底 = 选中(焦点,与其它列表统一);文字色 = working 白 / waiting 橙。
         let bg = if is_focus {
-            Some(ColorFormat::CSS_DARK_BLUE)
+            Some(ColorFormat::CSS_DARK_CYAN)
         } else {
             None
         };
@@ -868,9 +899,11 @@ pub fn render_session_list(
         } else {
             ColorFormat::CSS_DARK_ORANGE
         };
-        // 文泉驿字体:标题可能含中文。标签由 mqtt::session_labels 截到 15 字符,单行不溢出。
-        draw_text(target, label, rect, color, bg, HorizontalAlignment::Left)?;
+        // ●/○ 前缀:状态不只靠颜色。标签由 mqtt::session_labels 截到 15 字符,单行不溢出。
+        let line = format!("{} {}", if *is_working { "●" } else { "○" }, label);
+        draw_text(target, &line, rect, color, bg, HorizontalAlignment::Left)?;
     }
+    draw_scrollbar(target, start_y, items.len(), start, visible)?;
     flush(target)
 }
 
