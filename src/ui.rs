@@ -126,6 +126,35 @@ fn draw_scrollbar(
     )
 }
 
+/// 右上角回滚角标:黑底橙框橙字 `^ n`(n = 距最新内容的行/格数)。返回角标 rect,
+/// 调用方负责 flush_rect;整屏/整窗重画会自然盖掉它,隐藏无需显式清除。
+pub fn draw_scroll_badge(target: &mut FrameBuffer, n: usize) -> anyhow::Result<Rectangle> {
+    let bb = target.bounding_box();
+    let text = format!("^ {n}");
+    let w = (text.len() as u32) * 8 + 10;
+    let rect = Rectangle::new(
+        Point::new(bb.size.width as i32 - w as i32 - 4, 2),
+        Size::new(w, 20),
+    );
+    fill_rect(target, rect, ColorFormat::CSS_BLACK)?;
+    rect.draw_styled(
+        &PrimitiveStyle::with_stroke(ColorFormat::CSS_DARK_ORANGE, 1),
+        target,
+    )?;
+    draw_text(
+        target,
+        &text,
+        Rectangle::new(
+            Point::new(rect.top_left.x + 5, rect.top_left.y + 1),
+            Size::new(w - 8, LINE_H),
+        ),
+        ColorFormat::CSS_DARK_ORANGE,
+        None,
+        HorizontalAlignment::Left,
+    )?;
+    Ok(rect)
+}
+
 // ========== 开机菜单 ==========
 
 #[derive(Copy, Clone, Eq, PartialEq)]

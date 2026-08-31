@@ -239,6 +239,12 @@ pub async fn run(
                                 log::error!("Failed to flush screen window: {e:?}");
                             }
                         }
+                        draw_jpeg_scroll_badge(
+                            ui,
+                            current_screen.as_ref(),
+                            view_window_offset,
+                            view_windows_height,
+                        );
                     } else {
                         // 已在缓冲最顶,请服务端往上翻(scrollback)。不立刻动窗口:保持当前画面、
                         // 显示 loading,等新帧到达再把窗口拉到最底(新帧最底接旧帧最顶,连续阅读不跳)。
@@ -290,6 +296,12 @@ pub async fn run(
                                     log::error!("Failed to flush screen window: {e:?}");
                                 }
                             }
+                            draw_jpeg_scroll_badge(
+                                ui,
+                                current_screen.as_ref(),
+                                view_window_offset,
+                                view_windows_height,
+                            );
                         } else if current_has_more_below {
                             // 已在缓冲最底、且本页还有下文:请服务端往下翻。不立刻动窗口:保持当前画面、
                             // 显示 loading,等新帧到达再把窗口拉到最顶(新帧最顶接旧帧最底,连续阅读不跳)。
@@ -497,6 +509,12 @@ pub async fn run(
                                 }
                                 current_has_more_below = has_more_below;
                                 current_screen = Some(display);
+                                draw_jpeg_scroll_badge(
+                                    ui,
+                                    current_screen.as_ref(),
+                                    view_window_offset,
+                                    view_windows_height,
+                                );
                             }
                             Err(e) => log::error!("Failed to decode JPEG: {e:?}"),
                         }
@@ -662,6 +680,26 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+/// JPEG 模式回滚角标:窗口不在缓冲最底时,右上角画 `^ n`(n = 距底部的滚轮格数,
+/// 步长 20px 与滚轮一致)。flush_window 每次整屏重画,回底后旧角标自然消失。
+/// 局限:服务端 scrollback 翻页后的深度不可知,只反映本地缓冲内的平移。
+fn draw_jpeg_scroll_badge(
+    ui: &mut crate::lcd::UI,
+    screen: Option<&crate::new_jpg::JpegBufferu16>,
+    view_window_offset: usize,
+    view_windows_height: usize,
+) {
+    let max_off = screen
+        .map(|b| b.height.saturating_sub(view_windows_height))
+        .unwrap_or(0);
+    let steps_up = max_off.saturating_sub(view_window_offset).div_ceil(20);
+    if steps_up > 0 {
+        if let Ok(rect) = crate::ui::draw_scroll_badge(ui.display_mut(), steps_up) {
+            let _ = ui.display_mut().flush_rect(rect);
+        }
+    }
 }
 
 /// 选择器内 select! 产出的事件:只负责取事件,真正借用 server 的处理放在下面
