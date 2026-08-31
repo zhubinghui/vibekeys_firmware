@@ -146,7 +146,8 @@ pub fn draw_scroll_badge(target: &mut FrameBuffer, n: usize) -> anyhow::Result<R
         &text,
         Rectangle::new(
             Point::new(rect.top_left.x + 5, rect.top_left.y + 1),
-            Size::new(w - 8, LINE_H),
+            // 高度必须 ≥ LINE_H+2,否则 FullRowsOnly 整行丢弃(见 STATUS2_H 注释)。
+            Size::new(w - 8, LINE_H + 2),
         ),
         ColorFormat::CSS_DARK_ORANGE,
         None,
@@ -1261,8 +1262,10 @@ pub struct KeyboardHome<'a> {
     pub show_exit_hint: bool,
 }
 
-/// 状态栏高度(render_keyboard_home 专用,= LINE_H,文字不越界)。
-const STATUS2_H: u32 = 18;
+/// 状态栏高度(render_keyboard_home 专用)。必须 ≥ LINE_H+2:embedded-text 的
+/// FullRowsOnly 会把装不满整行的行**整行丢弃**,18px 盒子里 wqy16 一行都画不出来
+/// (真机踩过:四个色点在、标签全消失)。
+const STATUS2_H: u32 = 20;
 
 /// 键盘模式稳态主屏:四槽状态栏(WiFi/BLE·n/MQTT/ASR + 版本号)+ 居中标识
 /// + 信息行(SSID / ASR 路径 / MIC 模式)。矮屏(keys)省略信息行与提示。
@@ -1308,7 +1311,7 @@ pub fn render_keyboard_home(target: &mut FrameBuffer, h: &KeyboardHome) -> anyho
     for (label, dot) in slots {
         fill_rect(
             target,
-            Rectangle::new(Point::new(x, 6), Size::new(6, 6)),
+            Rectangle::new(Point::new(x, 7), Size::new(6, 6)),
             dot,
         )?;
         let lw = (label.len() as u32) * 8 + 4;
