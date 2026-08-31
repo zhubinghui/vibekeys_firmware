@@ -961,8 +961,8 @@ pub fn render_keyboard_view(
     feedback: &str,
 ) -> anyhow::Result<()> {
     let bb = target.bounding_box();
-    // 不再 clear 成纯黑:画布重置为背景快照(用户上传的背景图,无图时即纯黑),
-    // 状态栏与文字叠加其上 —— 背景图因此在整个键盘模式期间常驻,而非入场闪 2 秒。
+    // 画布重置为背景快照(背景图已改为开机画面,进模式后快照通常是纯黑;
+    // Remote 占位页 fix_background 过的画面也经此恢复)。
     target.restore_background();
     draw_status_bar(target, wifi_on, Some(ble_on))?;
     let anim = Rectangle::new(

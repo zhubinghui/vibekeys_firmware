@@ -252,6 +252,19 @@ fn main() -> anyhow::Result<()> {
     let mut nvs = esp_idf_svc::nvs::EspDefaultNvs::new(partition, "setting", true)?;
 
     let mut setting = bt_wifi_mode::Setting::load_from_nvs(&nvs)?;
+
+    // 开机画面:用户上传的背景图开机停留 2s(display_png 自带 fix_background + sleep)。
+    // 此后 boot_menu 首帧的 fill_color 会把背景快照一并清黑,图不会泄漏成模式背景。
+    if !setting.background_png.0.is_empty() {
+        if let Err(e) = lcd::display_png(
+            &mut target,
+            setting.background_png.0.as_slice(),
+            std::time::Duration::from_secs(2),
+        ) {
+            log::warn!("Boot splash PNG failed to render: {e:?}");
+        }
+    }
+
     // Load keymap config before moving nvs
     let mut keymap = bt_keyboard_mode::KeymapConfig::load_from_nvs(&nvs)?;
     log::info!("Loaded keymap config with {} keys", keymap.keys.len());
@@ -514,26 +527,6 @@ fn main() -> anyhow::Result<()> {
             &format!("Keyboard Mode\n {ble_mac}"),
         );
 
-        // 背景图垫底:画一次并快照进背景层,此后 render_keyboard_view 的
-        // restore_background 让它常驻。修复根因:display_png 此前只存在于
-        // Remote 分支 —— Keyboard 模式从未画过背景图,「传了图却全黑」由此而来。
-        // 画失败只记日志:键盘功能不能因为一张图起不来。
-        if !setting.background_png.0.is_empty() {
-            if let Err(e) = lcd::display_png(
-                &mut target,
-                setting.background_png.0.as_slice(),
-                std::time::Duration::ZERO,
-            ) {
-                log::warn!("Background PNG failed to render: {e:?}");
-            }
-            let _ = ui::render_keyboard_view(
-                &mut target,
-                false,
-                false,
-                &format!("Keyboard Mode\n {ble_mac}"),
-            );
-        }
-
         runtime.block_on(keyboard_mode_main(
             &mut target,
             ble_device,
@@ -549,24 +542,6 @@ fn main() -> anyhow::Result<()> {
             wifi_on,
             &ble_mac.to_string(),
         ));
-    }
-
-    log::info!("Displaying PNG image on LCD...");
-
-    if setting.background_png.0.is_empty() {
-        log::info!("No background PNG found in settings, using default.");
-        std::thread::sleep(std::time::Duration::from_secs(2));
-    } else {
-        log::info!(
-            "Background PNG found in settings, size: {} bytes",
-            setting.background_png.0.len()
-        );
-        // 背景现在常驻键盘视图(render_keyboard_view 叠加其上),入场不必再停留展示。
-        lcd::display_png(
-            &mut target,
-            setting.background_png.0.as_slice(),
-            std::time::Duration::ZERO,
-        )?;
     }
 
     let (tx, rx) = tokio::sync::mpsc::channel::<app::Event>(64);
