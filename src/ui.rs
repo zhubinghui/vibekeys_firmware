@@ -95,6 +95,25 @@ fn flush(target: &mut FrameBuffer) -> anyhow::Result<()> {
     target.flush()
 }
 
+/// 两档布局分界:keys 窄屏(78px)放不下 y≥90 的底部元素(摘要行/信息行/提示栏等),
+/// 只有高度达标的屏(max2 172px)才绘制。所有「高屏才画」的判断统一走这里。
+const TALL_SCREEN_MIN_H: u32 = 150;
+
+fn tall_screen(height: u32) -> bool {
+    height >= TALL_SCREEN_MIN_H
+}
+
+/// 量文本像素宽(wqy16,与 draw_text 同字体)。状态栏槽位/组指示/角标等紧凑布局用,
+/// 替代 `len()*8` 估宽 —— 后者对 CJK(全宽 16px)会算错一倍。
+fn text_px_width(text: &str) -> u32 {
+    use embedded_graphics::text::renderer::TextRenderer as _;
+    U8g2TextStyle::new(u8g2_font_wqy16_t_gb2312, ColorFormat::CSS_WHITE)
+        .measure_string(text, Point::zero(), Baseline::Top)
+        .bounding_box
+        .size
+        .width
+}
+
 /// 右缘滚动条:`total > visible` 时画 3px 轨道 + 按比例青色滑块,否则不画。
 /// `top` = 列表区顶部 y(轨道从这里到屏底)。
 fn draw_scrollbar(
@@ -131,7 +150,7 @@ fn draw_scrollbar(
 pub fn draw_scroll_badge(target: &mut FrameBuffer, n: usize) -> anyhow::Result<Rectangle> {
     let bb = target.bounding_box();
     let text = format!("^ {n}");
-    let w = (text.len() as u32) * 8 + 10;
+    let w = text_px_width(&text) + 10;
     let rect = Rectangle::new(
         Point::new(bb.size.width as i32 - w as i32 - 4, 2),
         Size::new(w, 20),
@@ -258,7 +277,7 @@ fn render_boot_menu(
         }
     }
     // 底部:设备摘要 + 常驻键位提示(仅高屏;keys 78px 放不下,跳过)。
-    if height >= 150 {
+    if tall_screen(height) {
         draw_text(
             target,
             summary,
@@ -948,13 +967,7 @@ fn render_password(
     let height = target.bounding_box().size.height;
     clear(target, ColorFormat::CSS_BLACK)?;
     // 标题行:左 ssid(截断给组指示留位),右侧四个字符组标签,当前组高亮。
-    let header_disp: String = if header.chars().count() > 18 {
-        let mut s: String = header.chars().take(17).collect();
-        s.push_str("..");
-        s
-    } else {
-        header.to_string()
-    };
+    let header_disp = crate::util::truncate_ellipsis(header, 18);
     draw_text(
         target,
         &header_disp,
@@ -966,10 +979,13 @@ fn render_password(
         None,
         HorizontalAlignment::Left,
     )?;
-    let total_gw: i32 = GROUP_LABELS.iter().map(|l| l.len() as i32 * 8 + 6).sum();
+    let total_gw: i32 = GROUP_LABELS
+        .iter()
+        .map(|l| text_px_width(l) as i32 + 6)
+        .sum();
     let mut gx = width as i32 - 4 - total_gw;
     for (gi, gl) in GROUP_LABELS.iter().enumerate() {
-        let gw = gl.len() as u32 * 8 + 4;
+        let gw = text_px_width(gl) + 4;
         let grect = Rectangle::new(Point::new(gx, 0), Size::new(gw, LINE_H + 2));
         if gi == group {
             fill_rect(target, grect, ColorFormat::CSS_DARK_SLATE_GRAY)?;
@@ -1002,12 +1018,7 @@ fn render_password(
         HorizontalAlignment::Left,
     )?;
     // 插入点光标:量出密码文本像素宽,在末尾画一个块状光标,随输入/退格左右移动。
-    use embedded_graphics::text::renderer::TextRenderer as _;
-    let text_w = U8g2TextStyle::new(u8g2_font_wqy16_t_gb2312, ColorFormat::CSS_WHITE)
-        .measure_string(password, Point::zero(), Baseline::Top)
-        .bounding_box
-        .size
-        .width;
+    let text_w = text_px_width(password);
     fill_rect(
         target,
         Rectangle::new(Point::new(4 + text_w as i32, 18), Size::new(8, 16)),
@@ -1220,7 +1231,7 @@ pub fn render_ota_progress(
         None,
         HorizontalAlignment::Center,
     )?;
-    if height >= 150 {
+    if tall_screen(height) {
         draw_text(
             target,
             phase,
@@ -1315,7 +1326,7 @@ pub fn render_keyboard_home(target: &mut FrameBuffer, h: &KeyboardHome) -> anyho
             Rectangle::new(Point::new(x, 7), Size::new(6, 6)),
             dot,
         )?;
-        let lw = (label.len() as u32) * 8 + 4;
+        let lw = text_px_width(label) + 4;
         draw_text(
             target,
             label,
@@ -1347,7 +1358,7 @@ pub fn render_keyboard_home(target: &mut FrameBuffer, h: &KeyboardHome) -> anyho
         HorizontalAlignment::Center,
     )?;
     // 信息行 + 一次性退出提示(矮屏放不下,跳过)。
-    if height >= 150 {
+    if tall_screen(height) {
         let info = format!(
             "{}  ASR:{}  MIC:{}",
             if h.ssid.is_empty() { "no wifi" } else { h.ssid },
@@ -1443,6 +1454,24 @@ impl Popup {
     /// 显示弹窗。若已打开则只重画内容(不重复 backup)。
     pub fn show(&mut self, target: &mut FrameBuffer, text: &str) -> anyhow::Result<()> {
         self.show_with_border(target, text, ColorFormat::CSS_WHITE)
+    }
+
+    // 语义弹窗三色约定(全局统一,勿在调用点散写颜色):
+    // 黄=进行中 / 绿=就绪·监听中 / 红=错误;白(show)留给中性询问。
+
+    /// 进行中(loading/connecting 等):黄框。
+    pub fn show_busy(&mut self, target: &mut FrameBuffer, text: &str) -> anyhow::Result<()> {
+        self.show_with_border(target, text, ColorFormat::CSS_YELLOW)
+    }
+
+    /// 就绪/监听中(listening/recording 等):绿框。
+    pub fn show_ready(&mut self, target: &mut FrameBuffer, text: &str) -> anyhow::Result<()> {
+        self.show_with_border(target, text, ColorFormat::CSS_GREEN)
+    }
+
+    /// 错误(断线/失败等):红框。
+    pub fn show_error(&mut self, target: &mut FrameBuffer, text: &str) -> anyhow::Result<()> {
+        self.show_with_border(target, text, ColorFormat::CSS_RED)
     }
 
     /// 显示弹窗,指定边框颜色(connecting=黄 / listening=绿 等)。若已打开则只重画(不重复 backup)。

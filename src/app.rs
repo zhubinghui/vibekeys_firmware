@@ -46,6 +46,10 @@ impl std::fmt::Debug for Event {
     }
 }
 
+/// 滚轮每格本地平移的像素步长(JPEG 模式,可调)。
+/// 回滚角标用它换算「距底部格数」,必须与滚动共用同一常量,否则改步长后角标失真。
+const SCROLL_STEP_PX: usize = 20;
+
 enum SelectResult {
     Event(Event),
     Mqtt(crate::mqtt::MqttEvent),
@@ -150,8 +154,6 @@ pub async fn run(
     // 还没有 RTT 样本时(首次翻页前)用的默认超时。
     const RTT_TIMEOUT_DEFAULT: std::time::Duration = std::time::Duration::from_millis(1500);
     let view_windows_height = crate::lcd::DISPLAY_HEIGHT;
-    /// 滚轮每格本地平移的像素步长(可调)。
-    const SCROLL_STEP_PX: usize = 20;
 
     loop {
         // 把 desired_prefix 落实为 subscribe(必须在 select 之外,不可被取消)。
@@ -193,8 +195,7 @@ pub async fn run(
         // 弹窗收敛:在线则关闭上一轮瞬态弹窗;断线则(重新)显示「下线」弹窗,
         // 让它在无事件期间也持续保持(断线时不会有 MQTT 事件来触发重绘)。
         if disconnected {
-            let _ =
-                popup.show_with_border(ui.display_mut(), "MQTT disconnected", ColorFormat::CSS_RED);
+            let _ = popup.show_error(ui.display_mut(), "MQTT disconnected");
         } else {
             let _ = popup.hide(ui.display_mut());
         }
@@ -223,11 +224,7 @@ pub async fn run(
                                 if pending_scroll.is_none() {
                                     pending_scroll = Some(PendingScroll::Up);
                                     pending_since = Some(std::time::Instant::now());
-                                    let _ = popup.show_with_border(
-                                        ui.display_mut(),
-                                        "loading...",
-                                        ColorFormat::CSS_YELLOW,
-                                    );
+                                    let _ = popup.show_busy(ui.display_mut(), "loading...");
                                     server
                                         .send(protocol::ClientMessage::ScrollUp { rows: 0 })
                                         .await?;
@@ -257,11 +254,7 @@ pub async fn run(
                         if pending_scroll.is_none() {
                             pending_scroll = Some(PendingScroll::Up);
                             pending_since = Some(std::time::Instant::now());
-                            let _ = popup.show_with_border(
-                                ui.display_mut(),
-                                "loading...",
-                                ColorFormat::CSS_YELLOW,
-                            );
+                            let _ = popup.show_busy(ui.display_mut(), "loading...");
                             server
                                 .send(protocol::ClientMessage::ScrollUp { rows: 0 })
                                 .await?;
@@ -282,11 +275,7 @@ pub async fn run(
                                 if pending_scroll.is_none() {
                                     pending_scroll = Some(PendingScroll::Down);
                                     pending_since = Some(std::time::Instant::now());
-                                    let _ = popup.show_with_border(
-                                        ui.display_mut(),
-                                        "loading...",
-                                        ColorFormat::CSS_YELLOW,
-                                    );
+                                    let _ = popup.show_busy(ui.display_mut(), "loading...");
                                     server
                                         .send(protocol::ClientMessage::ScrollDown { rows: 0 })
                                         .await?;
@@ -322,11 +311,7 @@ pub async fn run(
                             if pending_scroll.is_none() {
                                 pending_scroll = Some(PendingScroll::Down);
                                 pending_since = Some(std::time::Instant::now());
-                                let _ = popup.show_with_border(
-                                    ui.display_mut(),
-                                    "loading...",
-                                    ColorFormat::CSS_YELLOW,
-                                );
+                                let _ = popup.show_busy(ui.display_mut(), "loading...");
                                 server
                                     .send(protocol::ClientMessage::ScrollDown { rows: 0 })
                                     .await?;
@@ -576,11 +561,7 @@ pub async fn run(
                     pending_scroll = None;
                     pending_since = None;
                     disconnected = true;
-                    let _ = popup.show_with_border(
-                        ui.display_mut(),
-                        "MQTT disconnected",
-                        ColorFormat::CSS_RED,
-                    );
+                    let _ = popup.show_error(ui.display_mut(), "MQTT disconnected");
                 }
                 crate::mqtt::MqttEvent::Reconnected => {
                     log::info!("MQTT reconnected; subscriptions restored");
@@ -613,11 +594,7 @@ pub async fn run(
                 let (ctx, crx) = tokio::sync::oneshot::channel(); // 连上 server(TLS 完成)信号
                 let cancel = Arc::new(AtomicBool::new(false));
                 // 先显示 connecting(黄框);worker 完成 TLS 后 fire ctx,这里切到 listening(绿框)。
-                let _ = popup.show_with_border(
-                    ui.display_mut(),
-                    "connecting...",
-                    ColorFormat::CSS_YELLOW,
-                );
+                let _ = popup.show_busy(ui.display_mut(), "connecting...");
                 let req = crate::audio::AsrRequest {
                     config: cfg,
                     cancel: cancel.clone(),
@@ -626,11 +603,7 @@ pub async fn run(
                 };
                 if asr_tx.send(req).is_err() {
                     // worker 线程没起来 / 已退出。
-                    let _ = popup.show_with_border(
-                        ui.display_mut(),
-                        "ASR unavailable",
-                        ColorFormat::CSS_RED,
-                    );
+                    let _ = popup.show_error(ui.display_mut(), "ASR unavailable");
                     let _ = mic_btn.wait_for_high().await;
                     continue;
                 }
@@ -650,11 +623,7 @@ pub async fn run(
                         // 连上 server(TLS 完成):切 listening 绿框(只触发一次)。
                         _ = &mut crx, if !connected => {
                             connected = true;
-                            let _ = popup.show_with_border(
-                                ui.display_mut(),
-                                "listening...",
-                                ColorFormat::CSS_GREEN,
-                            );
+                            let _ = popup.show_ready(ui.display_mut(), "listening...");
                         }
                         // 停止录音的边沿按麦克风模式分:
                         //   PTT  → 松手停止(wait_for_high:此时按下为低,等 rising level 即松手);
@@ -697,11 +666,7 @@ pub async fn run(
                     }
                     Err(e) => {
                         log::error!("Local ASR error: {e:?}");
-                        let _ = popup.show_with_border(
-                            ui.display_mut(),
-                            "ASR error",
-                            ColorFormat::CSS_RED,
-                        );
+                        let _ = popup.show_error(ui.display_mut(), "ASR error");
                     }
                 }
             }
@@ -712,8 +677,8 @@ pub async fn run(
 }
 
 /// JPEG 模式回滚角标:窗口不在缓冲最底时,右上角画 `^ n`(n = 距底部的滚轮格数,
-/// 步长 20px 与滚轮一致)。flush_window 每次整屏重画,回底后旧角标自然消失。
-/// 局限:服务端 scrollback 翻页后的深度不可知,只反映本地缓冲内的平移。
+/// 按 SCROLL_STEP_PX 换算,与滚轮步长同源)。flush_window 每次整屏重画,回底后
+/// 旧角标自然消失。局限:服务端 scrollback 翻页后的深度不可知,只反映本地平移。
 fn draw_jpeg_scroll_badge(
     ui: &mut crate::lcd::UI,
     screen: Option<&crate::new_jpg::JpegBufferu16>,
@@ -723,7 +688,9 @@ fn draw_jpeg_scroll_badge(
     let max_off = screen
         .map(|b| b.height.saturating_sub(view_windows_height))
         .unwrap_or(0);
-    let steps_up = max_off.saturating_sub(view_window_offset).div_ceil(20);
+    let steps_up = max_off
+        .saturating_sub(view_window_offset)
+        .div_ceil(SCROLL_STEP_PX);
     if steps_up > 0 {
         if let Ok(rect) = crate::ui::draw_scroll_badge(ui.display_mut(), steps_up) {
             let _ = ui.display_mut().flush_rect(rect);

@@ -321,15 +321,11 @@ fn main() -> anyhow::Result<()> {
 
     let mode = loop {
         // 摘要放 loop 内:Setting 页返回后 wifi_list 可能已变,重算保持准确。
-        let srv_host = setting
-            .server_url
-            .split("://")
-            .nth(1)
-            .unwrap_or(&setting.server_url)
-            .split([':', '/'])
-            .next()
-            .unwrap_or("");
-        let boot_summary = format!("wifi:{}  srv:{}", setting.wifi_list.len(), srv_host);
+        let boot_summary = format!(
+            "wifi:{}  srv:{}",
+            setting.wifi_list.len(),
+            util::url_host(&setting.server_url)
+        );
         let choice = runtime.block_on(ui::boot_menu(
             &mut target,
             &mut btn7,
@@ -597,18 +593,11 @@ fn main() -> anyhow::Result<()> {
             Err(e) => {
                 log::error!("Failed to connect to WiFi: {:?}", e);
                 // ssid 截短:弹窗 36px 高只容两行,长 ssid 换行会挤掉操作提示。
-                let ssid_short: String = if ssid_disp.chars().count() > 12 {
-                    let mut s: String = ssid_disp.chars().take(11).collect();
-                    s.push_str("..");
-                    s
-                } else {
-                    ssid_disp
-                };
+                let ssid_short = util::truncate_ellipsis(&ssid_disp, 13);
                 let mut popup = ui::popup_centered(target.bounding_box());
-                let _ = popup.show_with_border(
+                let _ = popup.show_error(
                     &mut target,
                     &format!("WiFi failed: {ssid_short}\nACCEPT=retry  ESC=menu"),
-                    lcd::ColorFormat::CSS_RED,
                 );
                 // 此时按键线程尚未 spawn,btn3/btn7 仍归本作用域,阻塞轮询即可。
                 loop {
@@ -962,11 +951,7 @@ async fn keyboard_mode_main(
                         match driver.start_asr(
                             asr_config,
                             || {
-                                let _ = popup.show_with_border(
-                                    display,
-                                    "recording...",
-                                    crate::lcd::ColorFormat::CSS_GREEN,
-                                );
+                                let _ = popup.show_ready(display, "recording...");
                             },
                             || key_pins.mic.is_high(),
                         ) {
@@ -976,11 +961,7 @@ async fn keyboard_mode_main(
                             }
                             Err(e) => {
                                 log::error!("ASR error: {:?}", e);
-                                let _ = popup.show_with_border(
-                                    display,
-                                    "ASR error",
-                                    crate::lcd::ColorFormat::CSS_RED,
-                                );
+                                let _ = popup.show_error(display, "ASR error");
                             }
                         }
                     }
@@ -993,11 +974,7 @@ async fn keyboard_mode_main(
                         match driver.start_asr(
                             asr_config,
                             || {
-                                let _ = popup.show_with_border(
-                                    display,
-                                    "recording...",
-                                    crate::lcd::ColorFormat::CSS_GREEN,
-                                );
+                                let _ = popup.show_ready(display, "recording...");
                             },
                             || {
                                 if key_pins.mic.is_low() {
@@ -1017,11 +994,7 @@ async fn keyboard_mode_main(
                             }
                             Err(e) => {
                                 log::error!("ASR error: {:?}", e);
-                                let _ = popup.show_with_border(
-                                    display,
-                                    "ASR error",
-                                    crate::lcd::ColorFormat::CSS_RED,
-                                );
+                                let _ = popup.show_error(display, "ASR error");
                             }
                         }
                     }

@@ -36,12 +36,30 @@ enum OtaEvent {
     DownloadLatest,
 }
 
+/// 进度阶段(枚举而非裸字符串,发送端拼错编译期就报)。
+#[derive(Clone, Copy)]
+enum OtaPhase {
+    Downloading,
+    Uploading,
+    Finalizing,
+}
+
+impl OtaPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            OtaPhase::Downloading => "downloading",
+            OtaPhase::Uploading => "uploading",
+            OtaPhase::Finalizing => "finalizing",
+        }
+    }
+}
+
 /// worker → 主线程的进度事件(屏幕由主线程持有,worker 只发数据)。
 struct OtaProgress {
     written: usize,
     /// 目标总字节数;浏览器上传 / 无 content-length 时为 None。
     total: Option<usize>,
-    phase: &'static str,
+    phase: OtaPhase,
 }
 
 /// 进度上报节流:每写入这么多字节报一次(4KB 一报会刷屏过频)。
@@ -164,7 +182,7 @@ pub fn run(
         }
         if let Some(p) = latest {
             updating = true;
-            let _ = crate::ui::render_ota_progress(target, p.written, p.total, p.phase);
+            let _ = crate::ui::render_ota_progress(target, p.written, p.total, p.phase.as_str());
         }
         // 通道断开 = worker 已退出。成功路径在 worker 内 restart,走到这一律是失败——
         // 包括 HTTP 连接/TLS/404 等在**首个进度帧之前**就出错的情况(此前只在
@@ -308,7 +326,7 @@ fn ota_write_upload(
     let _ = ptx.send(OtaProgress {
         written,
         total: None,
-        phase: "uploading",
+        phase: OtaPhase::Uploading,
     });
 
     while let Ok(ev) = rx.recv() {
@@ -322,7 +340,7 @@ fn ota_write_upload(
                     let _ = ptx.send(OtaProgress {
                         written,
                         total: None,
-                        phase: "uploading",
+                        phase: OtaPhase::Uploading,
                     });
                 }
             }
@@ -335,7 +353,7 @@ fn ota_write_upload(
     let _ = ptx.send(OtaProgress {
         written,
         total: Some(written),
-        phase: "finalizing",
+        phase: OtaPhase::Finalizing,
     });
     update.complete()?;
     log::info!("OTA upload complete, restarting into new firmware");
@@ -385,7 +403,7 @@ fn ota_download_latest(ptx: std::sync::mpsc::Sender<OtaProgress>) -> anyhow::Res
     let _ = ptx.send(OtaProgress {
         written: 0,
         total: content_len,
-        phase: "downloading",
+        phase: OtaPhase::Downloading,
     });
 
     let mut buf = vec![0u8; 8192];
@@ -403,7 +421,7 @@ fn ota_download_latest(ptx: std::sync::mpsc::Sender<OtaProgress>) -> anyhow::Res
             let _ = ptx.send(OtaProgress {
                 written: total,
                 total: content_len,
-                phase: "downloading",
+                phase: OtaPhase::Downloading,
             });
         }
         log::info!("OTA download chunk: {} bytes, total {}", n, total);
@@ -412,7 +430,7 @@ fn ota_download_latest(ptx: std::sync::mpsc::Sender<OtaProgress>) -> anyhow::Res
     let _ = ptx.send(OtaProgress {
         written: total,
         total: content_len.or(Some(total)),
-        phase: "finalizing",
+        phase: OtaPhase::Finalizing,
     });
     update.complete()?;
     log::info!("OTA download complete: {} bytes, restarting", total);
