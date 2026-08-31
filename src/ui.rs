@@ -6,7 +6,6 @@
 
 use embedded_graphics::{
     image::GetPixel,
-    mono_font::{ascii::FONT_9X15_BOLD, MonoTextStyle, MonoTextStyleBuilder},
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle, StyledDrawable},
     text::{Alignment, Baseline, LineHeight, Text, TextStyleBuilder},
@@ -37,36 +36,10 @@ fn fill_rect(target: &mut FrameBuffer, rect: Rectangle, color: ColorFormat) -> a
     Ok(rect.draw_styled(&PrimitiveStyle::with_fill(color), target)?)
 }
 
-/// 在 `rect` 内画文本(**仅 ASCII**,菜单/标签用)。`bg=Some` 时给文本填背景(用于焦点高亮)。
+/// 在 `rect` 内画文本(wqy16,**全 UI 统一字体**,ASCII 与中文同路径)。
+/// `bg=Some` 时给文本填背景(用于焦点高亮)。
+/// 字体缺字(GB2312 之外)时 U8g2TextStyle 默认跳过(`ignore_unknown_chars`),不会乱码。
 fn draw_text(
-    target: &mut FrameBuffer,
-    text: &str,
-    rect: Rectangle,
-    color: ColorFormat,
-    bg: Option<ColorFormat>,
-    align: HorizontalAlignment,
-) -> anyhow::Result<()> {
-    if let Some(bg) = bg {
-        fill_rect(target, rect, bg)?;
-    }
-    let style = TextBoxStyleBuilder::new()
-        .alignment(align)
-        .height_mode(HeightMode::ShrinkToText(VerticalOverdraw::FullRowsOnly))
-        .line_height(LineHeight::Pixels(LINE_H))
-        .build();
-    TextBox::with_textbox_style(
-        text,
-        rect,
-        MonoTextStyle::new(&FONT_9X15_BOLD, color),
-        style,
-    )
-    .draw(target)?;
-    Ok(())
-}
-
-/// 与 `draw_text` 同形,但用 u8g2 文泉驿字体(**支持中文**),给 ASR 等可能含中文的文本用。
-/// 字体缺字时 U8g2TextStyle 默认跳过(`ignore_unknown_chars`),不会乱码。
-fn draw_text_cjk(
     target: &mut FrameBuffer,
     text: &str,
     rect: Rectangle,
@@ -841,7 +814,7 @@ pub fn render_session_list(
             ColorFormat::CSS_DARK_ORANGE
         };
         // 文泉驿字体:标题可能含中文。标签由 mqtt::session_labels 截到 15 字符,单行不溢出。
-        draw_text_cjk(target, label, rect, color, bg, HorizontalAlignment::Left)?;
+        draw_text(target, label, rect, color, bg, HorizontalAlignment::Left)?;
     }
     flush(target)
 }
@@ -872,17 +845,15 @@ fn render_password(
         HorizontalAlignment::Left,
     )?;
     // 插入点光标:量出密码文本像素宽,在末尾画一个块状光标,随输入/退格左右移动。
-    let text_w = Text::new(
-        password,
-        Point::zero(),
-        MonoTextStyle::new(&FONT_9X15_BOLD, ColorFormat::CSS_WHITE),
-    )
-    .bounding_box()
-    .size
-    .width;
+    use embedded_graphics::text::renderer::TextRenderer as _;
+    let text_w = U8g2TextStyle::new(u8g2_font_wqy16_t_gb2312, ColorFormat::CSS_WHITE)
+        .measure_string(password, Point::zero(), Baseline::Top)
+        .bounding_box
+        .size
+        .width;
     fill_rect(
         target,
-        Rectangle::new(Point::new(4 + text_w as i32, 18), Size::new(9, 15)),
+        Rectangle::new(Point::new(4 + text_w as i32, 18), Size::new(8, 16)),
         ColorFormat::CSS_WHITE,
     )?;
     // 字符轮盘:一排字符,中间高亮(= focus),Next 键/旋钮滑动
@@ -1008,11 +979,11 @@ pub fn render_keyboard_view(
         TextBox::with_textbox_style(
             feedback,
             anim,
-            MonoTextStyleBuilder::new()
-                .font(&FONT_9X15_BOLD)
-                .text_color(ColorFormat::CSS_WHITE)
-                .background_color(ColorFormat::CSS_BLACK)
-                .build(),
+            crate::lcd::MyTextStyle {
+                font_style: U8g2TextStyle::new(u8g2_font_wqy16_t_gb2312, ColorFormat::CSS_WHITE),
+                vertical_offset: 3,
+                bg_color: Some(ColorFormat::CSS_BLACK),
+            },
             style,
         )
         .draw(target)?;
@@ -1166,7 +1137,7 @@ fn draw_popup_with_border(
             r.size.height.saturating_sub(4),
         ),
     );
-    draw_text_cjk(
+    draw_text(
         target,
         text,
         inner,
