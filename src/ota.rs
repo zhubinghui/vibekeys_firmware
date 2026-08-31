@@ -166,7 +166,11 @@ pub fn run(
             updating = true;
             let _ = crate::ui::render_ota_progress(target, p.written, p.total, p.phase);
         }
-        if worker_gone && updating {
+        // 通道断开 = worker 已退出。成功路径在 worker 内 restart,走到这一律是失败——
+        // 包括 HTTP 连接/TLS/404 等在**首个进度帧之前**就出错的情况(此前只在
+        // `updating` 后才处理,早期失败会让屏幕停在 "Requesting latest..." 且
+        // 再按 ACCEPT 只是朝已关闭的通道发消息,静默无效)。
+        if worker_gone {
             crate::lcd::display_text(target, "OTA failed\n ESC to back", 0)?;
             while esc_btn.is_high() {
                 std::thread::sleep(std::time::Duration::from_millis(20));
