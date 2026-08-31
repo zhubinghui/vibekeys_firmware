@@ -957,6 +957,8 @@ async fn keyboard_mode_main(
                         ) {
                             Ok(asr) => {
                                 let _ = popup.show(display, &asr);
+                                // ASCII 部分直接 HID 敲入主机;全文另经 notify 供主机侧代理(CJK 路径)。
+                                type_asr_text(keyboard, &asr);
                                 controller.notify_asr(&asr);
                             }
                             Err(e) => {
@@ -990,6 +992,8 @@ async fn keyboard_mode_main(
                         ) {
                             Ok(asr) => {
                                 let _ = popup.show(display, &asr);
+                                // ASCII 部分直接 HID 敲入主机;全文另经 notify 供主机侧代理(CJK 路径)。
+                                type_asr_text(keyboard, &asr);
                                 controller.notify_asr(&asr);
                             }
                             Err(e) => {
@@ -1017,6 +1021,20 @@ async fn keyboard_mode_main(
             display, ble_device, keyboard, event, keymap, key_pins, wifi_on,
         )
         .await;
+    }
+}
+
+/// 把 ASR 文本里 HID 能表达的部分直接敲给主机(ASCII 可见字符 + 空格)。
+/// CJK 无法经标准 HID 键码输入 —— 过滤掉,由调用方继续走 BLE notify(主机侧代理路径)。
+/// 尾部补一个空格,连续听写时词与词自然分隔。
+fn type_asr_text(keyboard: &mut bt_keyboard_mode::KeyboardAndMouse, text: &str) {
+    let ascii: String = text
+        .chars()
+        .filter(|c| c.is_ascii_graphic() || *c == ' ')
+        .collect();
+    let t = ascii.trim();
+    if !t.is_empty() {
+        keyboard.write(&format!("{t} "));
     }
 }
 
