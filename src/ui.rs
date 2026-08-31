@@ -1136,6 +1136,87 @@ pub fn render_keyboard_view(
     flush(target)
 }
 
+/// OTA 进度页:标题 + 进度条 + 字节/百分比 + 阶段 + 断电警告。
+/// `total=None`(浏览器上传 / 无 content-length)时只显示已写字节数。
+/// 矮屏(keys)省略阶段行与警告行。
+pub fn render_ota_progress(
+    target: &mut FrameBuffer,
+    written: usize,
+    total: Option<usize>,
+    phase: &str,
+) -> anyhow::Result<()> {
+    let bb = target.bounding_box();
+    let (width, height) = (bb.size.width, bb.size.height);
+    clear(target, ColorFormat::CSS_BLACK)?;
+    draw_text(
+        target,
+        concat!("OTA  v", env!("CARGO_PKG_VERSION")),
+        Rectangle::new(Point::new(4, 0), Size::new(width - 8, LINE_H + 2)),
+        ColorFormat::CSS_WHEAT,
+        None,
+        HorizontalAlignment::Left,
+    )?;
+    let bar_w = width.saturating_sub(40);
+    let bar_y = (height as i32) / 2 - 16;
+    let bar = Rectangle::new(Point::new(20, bar_y), Size::new(bar_w, 14));
+    bar.draw_styled(&PrimitiveStyle::with_stroke(ColorFormat::CSS_WHITE, 1), target)?;
+    let known_total = total.filter(|t| *t > 0);
+    if let Some(t) = known_total {
+        let inner_w = bar_w.saturating_sub(4) as usize;
+        let fill_w = (inner_w * written.min(t) / t) as u32;
+        fill_rect(
+            target,
+            Rectangle::new(Point::new(22, bar_y + 2), Size::new(fill_w, 10)),
+            ColorFormat::CSS_DARK_CYAN,
+        )?;
+    }
+    let line = match known_total {
+        Some(t) => format!(
+            "{} / {} KB  {}%",
+            written / 1024,
+            t / 1024,
+            (written.min(t)) * 100 / t
+        ),
+        None => format!("{} KB", written / 1024),
+    };
+    draw_text(
+        target,
+        &line,
+        Rectangle::new(
+            Point::new(4, bar_y + 20),
+            Size::new(width - 8, LINE_H + 2),
+        ),
+        ColorFormat::CSS_WHITE,
+        None,
+        HorizontalAlignment::Center,
+    )?;
+    if height >= 150 {
+        draw_text(
+            target,
+            phase,
+            Rectangle::new(
+                Point::new(4, bar_y + 42),
+                Size::new(width - 8, LINE_H + 2),
+            ),
+            ColorFormat::CSS_GRAY,
+            None,
+            HorizontalAlignment::Center,
+        )?;
+        draw_text(
+            target,
+            "do not power off",
+            Rectangle::new(
+                Point::new(4, height as i32 - LINE_H as i32 - 2),
+                Size::new(width - 8, LINE_H + 2),
+            ),
+            ColorFormat::CSS_YELLOW,
+            None,
+            HorizontalAlignment::Center,
+        )?;
+    }
+    flush(target)
+}
+
 /// 键盘模式稳态主屏的数据(按 MIC 前用户想确认的事)。
 pub struct KeyboardHome<'a> {
     pub wifi_on: bool,
