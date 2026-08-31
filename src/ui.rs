@@ -225,8 +225,15 @@ fn render_boot_menu(
 
 // ========== Setting 页面 ==========
 
-/// 密码字符轮:0-9 a-z A-Z。
-const CHARSET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+/// 密码字符组:NEXT 键切组,组内旋钮/滚轮选字。最后一组是符号(WiFi 密码常见)。
+/// 每组轮盘末尾附加一个虚拟 OK 格(索引 == 组长度)用于提交。
+const CHARSET_GROUPS: [&[u8]; 4] = [
+    b"abcdefghijklmnopqrstuvwxyz",
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    b"0123456789",
+    b"!@#$%^&*()-_=+[]{};:'\",.<>/?`~|\\",
+];
+const GROUP_LABELS: [&str; 4] = ["abc", "ABC", "123", "#!?"];
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum SettingState {
@@ -330,6 +337,7 @@ pub async fn setting_page(
     let mut pending_ssid: String = String::new();
     let mut password: String = String::new();
     let mut cur_char: usize = 0;
+    let mut cur_group: usize = 0; // CHARSET_GROUPS 当前组(NEXT 切换)
 
     loop {
         match state {
@@ -418,15 +426,47 @@ pub async fn setting_page(
                 }
             }
             SettingState::PassEditor => {
-                let _ = render_password(target, &pending_ssid, &password, cur_char);
+                let group = CHARSET_GROUPS[cur_group];
+                let wheel_len = group.len() + 1; // 末位 = OK(提交)
+                let _ = render_password(target, &pending_ssid, &password, cur_group, cur_char);
                 match wait_input(rot_a, accept, esc, next, backspace).await {
-                    InputEvt::Next => cur_char = rotate_index(cur_char, CHARSET.len(), true),
+                    InputEvt::Next => {
+                        // NEXT 切字符组(abc/ABC/123/#!?),焦点回组首。
+                        cur_group = (cur_group + 1) % CHARSET_GROUPS.len();
+                        cur_char = 0;
+                    }
                     InputEvt::Rotate => {
-                        cur_char = rotate_index(cur_char, CHARSET.len(), rot_down(rot_a, rot_b));
+                        cur_char = rotate_index(cur_char, wheel_len, rot_down(rot_a, rot_b));
                     }
                     InputEvt::Accept => {
-                        if password.len() < 32 {
-                            password.push(CHARSET[cur_char] as char);
+                        if cur_char == group.len() {
+                            // OK 格:提交 —— 更新已有 / 新增一条,落盘。
+                            match cur_editing {
+                                Some(i) if i < setting.wifi_list.len() => {
+                                    setting.wifi_list[i].ssid = pending_ssid.clone();
+                                    setting.wifi_list[i].pass = password.clone();
+                                }
+                                _ if setting.wifi_list.len() < MAX_WIFI_CREDS => {
+                                    setting.wifi_list.push(WifiCred {
+                                        ssid: pending_ssid.clone(),
+                                        pass: password.clone(),
+                                    });
+                                }
+                                _ => {}
+                            }
+                            if let Err(e) = BtSetting::save_wifi_list(nvs, &setting.wifi_list) {
+                                log::error!("Failed to save wifi_list: {:?}", e);
+                            }
+                            // 回到 cred 列表,焦点回到刚编辑/新增的那条。
+                            cred_focus =
+                                cur_editing.unwrap_or(setting.wifi_list.len().saturating_sub(1));
+                            cur_editing = None;
+                            pending_ssid.clear();
+                            password.clear();
+                            cur_char = 0;
+                            state = SettingState::WifiCreds;
+                        } else if password.len() < 32 {
+                            password.push(group[cur_char] as char);
                         }
                     }
                     InputEvt::Backspace => {
@@ -434,29 +474,11 @@ pub async fn setting_page(
                         password.pop();
                     }
                     InputEvt::Esc => {
-                        // 提交:更新已有 / 新增一条。
-                        match cur_editing {
-                            Some(i) if i < setting.wifi_list.len() => {
-                                setting.wifi_list[i].ssid = pending_ssid.clone();
-                                setting.wifi_list[i].pass = password.clone();
-                            }
-                            _ if setting.wifi_list.len() < MAX_WIFI_CREDS => {
-                                setting.wifi_list.push(WifiCred {
-                                    ssid: pending_ssid.clone(),
-                                    pass: password.clone(),
-                                });
-                            }
-                            _ => {}
-                        }
-                        if let Err(e) = BtSetting::save_wifi_list(nvs, &setting.wifi_list) {
-                            log::error!("Failed to save wifi_list: {:?}", e);
-                        }
-                        // 回到 cred 列表,焦点回到刚编辑/新增的那条。
-                        cred_focus =
-                            cur_editing.unwrap_or(setting.wifi_list.len().saturating_sub(1));
+                        // 取消:丢弃本次编辑,不落盘(提交只走 OK 格)。
                         cur_editing = None;
                         pending_ssid.clear();
                         password.clear();
+                        cur_char = 0;
                         state = SettingState::WifiCreds;
                     }
                 }
@@ -856,19 +878,58 @@ fn render_password(
     target: &mut FrameBuffer,
     header: &str,
     password: &str,
+    group: usize,
     focus: usize,
 ) -> anyhow::Result<()> {
     let width = target.bounding_box().size.width;
     let height = target.bounding_box().size.height;
     clear(target, ColorFormat::CSS_BLACK)?;
+    // 标题行:左 ssid(截断给组指示留位),右侧四个字符组标签,当前组高亮。
+    let header_disp: String = if header.chars().count() > 18 {
+        let mut s: String = header.chars().take(17).collect();
+        s.push_str("..");
+        s
+    } else {
+        header.to_string()
+    };
     draw_text(
         target,
-        header,
-        Rectangle::new(Point::new(4, 0), Size::new(width - 4, LINE_H + 2)),
+        &header_disp,
+        Rectangle::new(
+            Point::new(4, 0),
+            Size::new(width.saturating_sub(140), LINE_H + 2),
+        ),
         ColorFormat::CSS_WHEAT,
         None,
         HorizontalAlignment::Left,
     )?;
+    let total_gw: i32 = GROUP_LABELS.iter().map(|l| l.len() as i32 * 8 + 6).sum();
+    let mut gx = width as i32 - 4 - total_gw;
+    for (gi, gl) in GROUP_LABELS.iter().enumerate() {
+        let gw = gl.len() as u32 * 8 + 4;
+        let grect = Rectangle::new(Point::new(gx, 0), Size::new(gw, LINE_H + 2));
+        if gi == group {
+            fill_rect(target, grect, ColorFormat::CSS_DARK_SLATE_GRAY)?;
+            draw_text(
+                target,
+                gl,
+                grect,
+                ColorFormat::CSS_WHITE,
+                None,
+                HorizontalAlignment::Center,
+            )?;
+        } else {
+            draw_text(
+                target,
+                gl,
+                grect,
+                ColorFormat::CSS_GRAY,
+                None,
+                HorizontalAlignment::Center,
+            )?;
+        }
+        gx += gw as i32 + 2;
+    }
     draw_text(
         target,
         password,
@@ -889,17 +950,24 @@ fn render_password(
         Rectangle::new(Point::new(4 + text_w as i32, 18), Size::new(8, 16)),
         ColorFormat::CSS_WHITE,
     )?;
-    // 字符轮盘:一排字符,中间高亮(= focus),Next 键/旋钮滑动
-    let n = ((width / 16) as usize).clamp(5, 11);
+    // 字符轮盘:当前组字符 + 末位 OK 格,中间高亮(= focus),旋钮滑动、NEXT 切组。
+    let chars = CHARSET_GROUPS[group];
+    let wheel_len = chars.len() + 1; // 末位 = OK
+    let n = ((width / 16) as usize).clamp(5, 11).min(wheel_len);
     let cell_w = width / n as u32;
     let half = n / 2;
     let cell_h = LINE_H + 6;
     let y = 38;
     for k in 0..n {
-        let idx = (focus + k + CHARSET.len() - half) % CHARSET.len();
+        let idx = (focus + k + wheel_len - half) % wheel_len;
         let x = (k as u32) * cell_w;
         let rect = Rectangle::new(Point::new(x as i32, y), Size::new(cell_w, cell_h));
-        let ch = (CHARSET[idx] as char).to_string();
+        let is_ok = idx == chars.len();
+        let ch = if is_ok {
+            "OK".to_string()
+        } else {
+            (chars[idx] as char).to_string()
+        };
         if idx == focus {
             fill_rect(target, rect, ColorFormat::CSS_DARK_CYAN)?;
             draw_text(
@@ -908,6 +976,17 @@ fn render_password(
                 rect,
                 ColorFormat::CSS_WHITE,
                 Some(ColorFormat::CSS_DARK_CYAN),
+                HorizontalAlignment::Center,
+            )?;
+        } else if is_ok {
+            // OK 格常驻绿底,与普通字符区分。
+            fill_rect(target, rect, ColorFormat::CSS_DARK_GREEN)?;
+            draw_text(
+                target,
+                &ch,
+                rect,
+                ColorFormat::CSS_WHITE,
+                Some(ColorFormat::CSS_DARK_GREEN),
                 HorizontalAlignment::Center,
             )?;
         } else {
@@ -925,7 +1004,7 @@ fn render_password(
     let hint_y = (height as i32) - LINE_H as i32 - 2;
     draw_text(
         target,
-        "BkSp=del ESC=ok",
+        "NEXT=abc/#!?  OK=save  ESC=cancel",
         Rectangle::new(Point::new(4, hint_y), Size::new(width - 4, LINE_H + 2)),
         ColorFormat::CSS_WHEAT,
         None,
