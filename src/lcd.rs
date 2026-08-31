@@ -130,28 +130,64 @@ pub fn init_lcd(cs: Gpio12, dc: Gpio13, rst: Gpio14) -> Result<(), EspError> {
                 "FLUSH_BOUNCE alloc failed at init (internal DMA heap exhausted at boot)"
             );
             FLUSH_BOUNCE[i] = p;
-            ::log::info!("FLUSH_BOUNCE[{i}] = {:p}", p);
+            ::log::info!("FLUSH_BOUNCE[{i}] = {:p} (unified-flush build)", p);
         }
     }
 
     Ok(())
 }
 
-pub fn flush_display(color_data: &[u8], x_start: i32, y_start: i32, x_end: i32, y_end: i32) -> i32 {
-    unsafe {
-        let e = esp_idf_svc::sys::esp_lcd_panel_draw_bitmap(
-            ESP_LCD_PANEL_HANDLE,
-            x_start,
-            y_start,
-            x_end,
-            y_end,
-            color_data.as_ptr().cast(),
-        );
-        if e != 0 {
-            log::warn!("flush_display error: {}", e);
-        }
-        e
+/// 任意矩形区域经内部 DMA 弹跳区分批发送(乒乓,批 ≤ FLUSH_BAND_BYTES)。
+///
+/// `data` = 该区域的连续行数据(行宽 = (x_end-x_start)*2 字节)。所有 LCD 推送必须
+/// 走这里:直接把 PSRAM 里的缓冲交给 esp_lcd,会触发 spi_master 逐块乞讨内部
+/// bounce,堆紧张时中途 NO_MEM(257) —— 整帧路径 v0.4.7 已修,flush_rect/new_jpg
+/// 这两条漏网之腿曾在 Remote 模式造成花屏与 app 退出重启。
+pub fn flush_region_via_bounce(
+    data: &[u8],
+    x_start: i32,
+    y_start: i32,
+    x_end: i32,
+    y_end: i32,
+) -> i32 {
+    let row_bytes = ((x_end - x_start) as usize) * 2;
+    if row_bytes == 0 || data.is_empty() {
+        return 0;
     }
+    debug_assert!(row_bytes <= FLUSH_BAND_BYTES);
+    let batch_rows = (FLUSH_BAND_BYTES / row_bytes).max(1);
+    let total_rows = ((y_end - y_start) as usize).min(data.len() / row_bytes);
+    let mut b = 0usize;
+    let mut y = 0usize;
+    while y < total_rows {
+        let rows = batch_rows.min(total_rows - y);
+        let bytes = rows * row_bytes;
+        let off = y * row_bytes;
+        let e = unsafe {
+            let bounce = FLUSH_BOUNCE[b % 2];
+            std::ptr::copy_nonoverlapping(data.as_ptr().add(off), bounce, bytes);
+            esp_idf_svc::sys::esp_lcd_panel_draw_bitmap(
+                ESP_LCD_PANEL_HANDLE,
+                x_start,
+                y_start + y as i32,
+                x_end,
+                y_start + (y + rows) as i32,
+                bounce.cast(),
+            )
+        };
+        if e != 0 {
+            unsafe {
+                ::log::warn!(
+                    "flush_region band y={y} rows={rows} err={e}, free DMA heap={}",
+                    esp_idf_svc::sys::heap_caps_get_free_size(esp_idf_svc::sys::MALLOC_CAP_DMA)
+                );
+            }
+            return e;
+        }
+        b += 1;
+        y += rows;
+    }
+    0
 }
 
 /*
@@ -363,7 +399,7 @@ impl FrameBuffer {
         let xe = r.top_left.x + r.size.width as i32;
         let ye = r.top_left.y + r.size.height as i32;
         for i in 0..5 {
-            let code = flush_display(&sub, r.top_left.x, r.top_left.y, xe, ye);
+            let code = flush_region_via_bounce(&sub, r.top_left.x, r.top_left.y, xe, ye);
             if code == 0 {
                 return Ok(());
             }
@@ -404,45 +440,14 @@ impl DisplayTargetDrive for FrameBuffer {
         let x_end = bounding_box.top_left.x + bounding_box.size.width as i32;
         let y_end = bounding_box.top_left.y + bounding_box.size.height as i32;
 
-        // 经内部 DMA 弹跳区按条带发送:见 FLUSH_BOUNCE 注释。
-        let flush_banded = |data: &[u8]| -> i32 {
-            let mut e = 0;
-            let mut b = 0usize;
-            let mut y = 0usize;
-            while y < DISPLAY_HEIGHT {
-                let rows = FLUSH_BAND_ROWS.min(DISPLAY_HEIGHT - y);
-                let bytes = rows * DISPLAY_WIDTH * 2;
-                let off = y * DISPLAY_WIDTH * 2;
-                unsafe {
-                    let bounce = FLUSH_BOUNCE[b % 2];
-                    std::ptr::copy_nonoverlapping(data.as_ptr().add(off), bounce, bytes);
-                    e = esp_idf_svc::sys::esp_lcd_panel_draw_bitmap(
-                        ESP_LCD_PANEL_HANDLE,
-                        0,
-                        y as i32,
-                        DISPLAY_WIDTH as i32,
-                        (y + rows) as i32,
-                        bounce.cast(),
-                    );
-                }
-                if e != 0 {
-                    unsafe {
-                        ::log::warn!(
-                            "flush band {b} y={y} rows={rows} err={e}, free DMA heap={}",
-                            esp_idf_svc::sys::heap_caps_get_free_size(
-                                esp_idf_svc::sys::MALLOC_CAP_DMA
-                            )
-                        );
-                    }
-                    break;
-                }
-                b += 1;
-                y += rows;
-            }
-            e
-        };
         for i in 0..5 {
-            let e = flush_banded(self.buffers.data());
+            let e = flush_region_via_bounce(
+                self.buffers.data(),
+                0,
+                0,
+                DISPLAY_WIDTH as i32,
+                DISPLAY_HEIGHT as i32,
+            );
             let _ = (x_start, y_start, x_end, y_end);
             if e != 0 {
                 std::thread::sleep(std::time::Duration::from_millis(100));

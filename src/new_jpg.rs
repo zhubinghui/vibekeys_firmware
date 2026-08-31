@@ -58,7 +58,7 @@ impl JpegBuffer {
         // } else {
         //     crate::lcd::flush_display(ptr, 0, 0, 288, 80)
         // }
-        crate::lcd::flush_display(ptr, 0, 0, w, h)
+        crate::lcd::flush_region_via_bounce(ptr, 0, 0, w, h)
     }
 }
 
@@ -105,7 +105,7 @@ impl JpegBufferu16 {
         let start = offset_y * self.width * 2; // 2 bytes per pixel for RGB565
         let end = start + windows_size * self.width * 2; // 2 bytes per pixel for RGB565
 
-        let e = crate::lcd::flush_display(
+        let e = crate::lcd::flush_region_via_bounce(
             &ptr[start..end],
             0,
             0,
