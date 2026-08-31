@@ -1279,14 +1279,15 @@ pub fn render_keyboard_home(target: &mut FrameBuffer, h: &KeyboardHome) -> anyho
         ColorFormat::CSS_DARK_SLATE_GRAY,
     )?;
     let ble_text = format!("BLE:{}", h.ble_conns);
-    // (标签, 圆点颜色):绿=已连,蓝=BLE 有连接,灰=关/不适用。键盘模式无 MQTT,恒灰。
+    // (标签, 圆点颜色):绿=已连,红=WiFi 未连(配置了但连不上/无网络),
+    // 蓝=BLE 有连接,灰=关/不适用。键盘模式无 MQTT,恒灰。
     let slots: [(&str, ColorFormat); 4] = [
         (
             "WiFi",
             if h.wifi_on {
                 ColorFormat::CSS_GREEN
             } else {
-                ColorFormat::CSS_GRAY
+                ColorFormat::CSS_RED
             },
         ),
         (
