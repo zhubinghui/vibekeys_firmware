@@ -320,7 +320,23 @@ fn main() -> anyhow::Result<()> {
     });
 
     let mode = loop {
-        let choice = runtime.block_on(ui::boot_menu(&mut target, &mut btn7, &mut btn3, &mut btn4));
+        // 摘要放 loop 内:Setting 页返回后 wifi_list 可能已变,重算保持准确。
+        let srv_host = setting
+            .server_url
+            .split("://")
+            .nth(1)
+            .unwrap_or(&setting.server_url)
+            .split([':', '/'])
+            .next()
+            .unwrap_or("");
+        let boot_summary = format!("wifi:{}  srv:{}", setting.wifi_list.len(), srv_host);
+        let choice = runtime.block_on(ui::boot_menu(
+            &mut target,
+            &mut btn7,
+            &mut btn3,
+            &mut btn4,
+            &boot_summary,
+        ));
         match choice {
             ui::BootChoice::Keyboard => break 3,
             ui::BootChoice::Remote => break 1,

@@ -119,18 +119,21 @@ enum MenuEvt {
 }
 
 /// 开机主菜单:Next 键正向切换选项、Accept 进入、Esc 逆向。返回选中的模式。
+/// `summary`:底部设备摘要行(已存 wifi 数 / server host),矮屏(keys)自动省略。
 pub async fn boot_menu(
     target: &mut FrameBuffer,
     accept: Btn<'_>,
     esc: Btn<'_>,
     next: Btn<'_>,
+    summary: &str,
 ) -> BootChoice {
     let mut focus: usize = 0;
-    let width = target.bounding_box().size.width;
+    let bb = target.bounding_box();
+    let (width, height) = (bb.size.width, bb.size.height);
     let n = BOOT_LABELS.len();
 
     loop {
-        let _ = render_boot_menu(target, focus, width);
+        let _ = render_boot_menu(target, focus, width, height, summary);
 
         let evt = tokio::select! {
             _ = next.wait_for_falling_edge() => MenuEvt::Next,
@@ -148,7 +151,13 @@ pub async fn boot_menu(
     }
 }
 
-fn render_boot_menu(target: &mut FrameBuffer, focus: usize, width: u32) -> anyhow::Result<()> {
+fn render_boot_menu(
+    target: &mut FrameBuffer,
+    focus: usize,
+    width: u32,
+    height: u32,
+    summary: &str,
+) -> anyhow::Result<()> {
     clear(target, ColorFormat::CSS_BLACK)?;
     draw_text(
         target,
@@ -186,6 +195,30 @@ fn render_boot_menu(target: &mut FrameBuffer, focus: usize, width: u32) -> anyho
                 HorizontalAlignment::Center,
             )?;
         }
+    }
+    // 底部:设备摘要 + 常驻键位提示(仅高屏;keys 78px 放不下,跳过)。
+    if height >= 150 {
+        draw_text(
+            target,
+            summary,
+            Rectangle::new(
+                Point::new(4, height as i32 - 54),
+                Size::new(width - 8, LINE_H + 2),
+            ),
+            ColorFormat::CSS_GRAY,
+            None,
+            HorizontalAlignment::Center,
+        )?;
+        let hint_rect = Rectangle::new(Point::new(0, height as i32 - 20), Size::new(width, 20));
+        fill_rect(target, hint_rect, ColorFormat::CSS_DARK_SLATE_GRAY)?;
+        draw_text(
+            target,
+            "NEXT=move  ACCEPT=enter  ESC=up",
+            hint_rect,
+            ColorFormat::CSS_WHEAT,
+            None,
+            HorizontalAlignment::Center,
+        )?;
     }
     flush(target)
 }
