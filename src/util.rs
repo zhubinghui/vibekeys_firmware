@@ -52,3 +52,23 @@ pub fn create_unlimited_wav_header(config: &WavConfig) -> Vec<u8> {
 
     wav_data
 }
+
+/// 从 URL 里取 host(去 scheme/端口/路径);无 scheme 时直接对整串取 host 段。
+pub fn url_host(url: &str) -> &str {
+    url.split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split([':', '/'])
+        .next()
+        .unwrap_or("")
+}
+
+/// 按字符数截断,超长以 ".." 结尾(结果 ≤ max_chars 个字符;中文按字算)。
+pub fn truncate_ellipsis(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let mut t: String = s.chars().take(max_chars.saturating_sub(2)).collect();
+    t.push_str("..");
+    t
+}

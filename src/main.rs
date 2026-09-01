@@ -252,6 +252,19 @@ fn main() -> anyhow::Result<()> {
     let mut nvs = esp_idf_svc::nvs::EspDefaultNvs::new(partition, "setting", true)?;
 
     let mut setting = bt_wifi_mode::Setting::load_from_nvs(&nvs)?;
+
+    // 开机画面:用户上传的背景图开机停留 2s(display_png 自带 fix_background + sleep)。
+    // 此后 boot_menu 首帧的 fill_color 会把背景快照一并清黑,图不会泄漏成模式背景。
+    if !setting.background_png.0.is_empty() {
+        if let Err(e) = lcd::display_png(
+            &mut target,
+            setting.background_png.0.as_slice(),
+            std::time::Duration::from_secs(2),
+        ) {
+            log::warn!("Boot splash PNG failed to render: {e:?}");
+        }
+    }
+
     // Load keymap config before moving nvs
     let mut keymap = bt_keyboard_mode::KeymapConfig::load_from_nvs(&nvs)?;
     log::info!("Loaded keymap config with {} keys", keymap.keys.len());
@@ -307,7 +320,19 @@ fn main() -> anyhow::Result<()> {
     });
 
     let mode = loop {
-        let choice = runtime.block_on(ui::boot_menu(&mut target, &mut btn7, &mut btn3, &mut btn4));
+        // 摘要放 loop 内:Setting 页返回后 wifi_list 可能已变,重算保持准确。
+        let boot_summary = format!(
+            "wifi:{}  srv:{}",
+            setting.wifi_list.len(),
+            util::url_host(&setting.server_url)
+        );
+        let choice = runtime.block_on(ui::boot_menu(
+            &mut target,
+            &mut btn7,
+            &mut btn3,
+            &mut btn4,
+            &boot_summary,
+        ));
         match choice {
             ui::BootChoice::Keyboard => break 3,
             ui::BootChoice::Remote => break 1,
@@ -514,25 +539,14 @@ fn main() -> anyhow::Result<()> {
             &format!("Keyboard Mode\n {ble_mac}"),
         );
 
-        // 背景图垫底:画一次并快照进背景层,此后 render_keyboard_view 的
-        // restore_background 让它常驻。修复根因:display_png 此前只存在于
-        // Remote 分支 —— Keyboard 模式从未画过背景图,「传了图却全黑」由此而来。
-        // 画失败只记日志:键盘功能不能因为一张图起不来。
-        if !setting.background_png.0.is_empty() {
-            if let Err(e) = lcd::display_png(
-                &mut target,
-                setting.background_png.0.as_slice(),
-                std::time::Duration::ZERO,
-            ) {
-                log::warn!("Background PNG failed to render: {e:?}");
-            }
-            let _ = ui::render_keyboard_view(
-                &mut target,
-                false,
-                false,
-                &format!("Keyboard Mode\n {ble_mac}"),
-            );
-        }
+        // 主屏信息行用:实际连上的 SSID(未连 WiFi 则空)。
+        let picked_ssid = if wifi_on {
+            bt_wifi_mode::pick_cred(&scan_list, &setting.wifi_list)
+                .map(|c| c.ssid.clone())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
 
         runtime.block_on(keyboard_mode_main(
             &mut target,
@@ -547,26 +561,9 @@ fn main() -> anyhow::Result<()> {
             asr_config,
             controller,
             wifi_on,
+            &picked_ssid,
             &ble_mac.to_string(),
         ));
-    }
-
-    log::info!("Displaying PNG image on LCD...");
-
-    if setting.background_png.0.is_empty() {
-        log::info!("No background PNG found in settings, using default.");
-        std::thread::sleep(std::time::Duration::from_secs(2));
-    } else {
-        log::info!(
-            "Background PNG found in settings, size: {} bytes",
-            setting.background_png.0.len()
-        );
-        // 背景现在常驻键盘视图(render_keyboard_view 叠加其上),入场不必再停留展示。
-        lcd::display_png(
-            &mut target,
-            setting.background_png.0.as_slice(),
-            std::time::Duration::ZERO,
-        )?;
     }
 
     let (tx, rx) = tokio::sync::mpsc::channel::<app::Event>(64);
@@ -574,21 +571,49 @@ fn main() -> anyhow::Result<()> {
     let _ = ui::render_keyboard_view(&mut target, false, false, "Connecting the WiFi...");
 
     // 用 boot 阶段的扫描结果与已配置 wifi_list 匹配,挑当前在范围内的网络连接。
-    let r = match bt_wifi_mode::pick_cred(&scan_list, &setting.wifi_list) {
-        Some(c) => wifi::connect(&mut wifi, &c.ssid, &c.pass, sysloop.clone()),
-        None => {
-            log::error!(
-                "No known WiFi network in range (scan_list has {})",
-                scan_list.len()
-            );
-            anyhow::Result::<()>::Err(anyhow::anyhow!("no known network in range"))
+    // 失败不再「睡 60s 强制重启」:红框弹窗给出路 —— ACCEPT=重试,ESC=重启回菜单。
+    loop {
+        let picked = bt_wifi_mode::pick_cred(&scan_list, &setting.wifi_list);
+        let ssid_disp = picked
+            .as_ref()
+            .map(|c| c.ssid.clone())
+            .unwrap_or_else(|| "no known WiFi".to_string());
+        let r = match picked {
+            Some(c) => wifi::connect(&mut wifi, &c.ssid, &c.pass, sysloop.clone()),
+            None => {
+                log::error!(
+                    "No known WiFi network in range (scan_list has {})",
+                    scan_list.len()
+                );
+                Err(anyhow::anyhow!("no known network in range"))
+            }
+        };
+        match r {
+            Ok(()) => break,
+            Err(e) => {
+                log::error!("Failed to connect to WiFi: {:?}", e);
+                // ssid 截短:弹窗 36px 高只容两行,长 ssid 换行会挤掉操作提示。
+                let ssid_short = util::truncate_ellipsis(&ssid_disp, 13);
+                let mut popup = ui::popup_centered(target.bounding_box());
+                let _ = popup.show_error(
+                    &mut target,
+                    &format!("WiFi failed: {ssid_short}\nACCEPT=retry  ESC=menu"),
+                );
+                // 此时按键线程尚未 spawn,btn3/btn7 仍归本作用域,阻塞轮询即可。
+                loop {
+                    if btn7.is_low() {
+                        wait_button_release(&btn7);
+                        break;
+                    }
+                    if btn3.is_low() {
+                        wait_button_release(&btn3);
+                        esp_idf_svc::hal::reset::restart();
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                let _ = popup.hide(&mut target);
+            }
         }
-    };
-    if r.is_err() {
-        log::error!("Failed to connect to WiFi: {:?}", r.err());
-        let _ = ui::render_keyboard_view(&mut target, false, false, " WiFi connection failed\n");
-        std::thread::sleep(std::time::Duration::from_secs(60));
-        esp_idf_svc::hal::reset::restart();
     }
 
     if setting.server_url.starts_with("mqtts")
@@ -840,14 +865,26 @@ async fn keyboard_mode_main(
     asr_config: Option<audio::AsrConfig>,
     controller: bt_keyboard_mode::ControllerService,
     wifi_on: bool,
+    ssid: &str,
     ble_mac: &str,
 ) -> ! {
-    let _ = ui::render_keyboard_view(
-        display,
-        true,
-        ble_device.get_server().connected_count() > 0,
-        &format!("Keyboard\n {ble_mac}"),
-    );
+    let has_asr = driver.is_some() && asr_config.is_some();
+    {
+        let lock = setting_arc.lock().unwrap();
+        let _ = ui::render_keyboard_home(
+            display,
+            &ui::KeyboardHome {
+                wifi_on,
+                ssid,
+                ble_conns: ble_device.get_server().connected_count(),
+                asr_on: has_asr,
+                asr_builtin: lock.0.prefer_builtin_asr,
+                mic_toggle: lock.0.mic_model == 1,
+                ble_mac,
+                show_exit_hint: true,
+            },
+        );
+    }
     let mut popup = ui::popup_centered(display.bounding_box());
     loop {
         let event = tokio::select! {
@@ -914,17 +951,19 @@ async fn keyboard_mode_main(
                         match driver.start_asr(
                             asr_config,
                             || {
-                                let _ = popup.show(display, "recording...");
+                                let _ = popup.show_ready(display, "recording...");
                             },
                             || key_pins.mic.is_high(),
                         ) {
                             Ok(asr) => {
                                 let _ = popup.show(display, &asr);
+                                // ASCII 部分直接 HID 敲入主机;全文另经 notify 供主机侧代理(CJK 路径)。
+                                type_asr_text(keyboard, &asr);
                                 controller.notify_asr(&asr);
                             }
                             Err(e) => {
                                 log::error!("ASR error: {:?}", e);
-                                let _ = popup.show(display, "ASR error");
+                                let _ = popup.show_error(display, "ASR error");
                             }
                         }
                     }
@@ -937,7 +976,7 @@ async fn keyboard_mode_main(
                         match driver.start_asr(
                             asr_config,
                             || {
-                                let _ = popup.show(display, "recording...");
+                                let _ = popup.show_ready(display, "recording...");
                             },
                             || {
                                 if key_pins.mic.is_low() {
@@ -953,11 +992,13 @@ async fn keyboard_mode_main(
                         ) {
                             Ok(asr) => {
                                 let _ = popup.show(display, &asr);
+                                // ASCII 部分直接 HID 敲入主机;全文另经 notify 供主机侧代理(CJK 路径)。
+                                type_asr_text(keyboard, &asr);
                                 controller.notify_asr(&asr);
                             }
                             Err(e) => {
                                 log::error!("ASR error: {:?}", e);
-                                let _ = popup.show(display, "ASR error");
+                                let _ = popup.show_error(display, "ASR error");
                             }
                         }
                     }
@@ -980,6 +1021,20 @@ async fn keyboard_mode_main(
             display, ble_device, keyboard, event, keymap, key_pins, wifi_on,
         )
         .await;
+    }
+}
+
+/// 把 ASR 文本里 HID 能表达的部分直接敲给主机(ASCII 可见字符 + 空格)。
+/// CJK 无法经标准 HID 键码输入 —— 过滤掉,由调用方继续走 BLE notify(主机侧代理路径)。
+/// 尾部补一个空格,连续听写时词与词自然分隔。
+fn type_asr_text(keyboard: &mut bt_keyboard_mode::KeyboardAndMouse, text: &str) {
+    let ascii: String = text
+        .chars()
+        .filter(|c| c.is_ascii_graphic() || *c == ' ')
+        .collect();
+    let t = ascii.trim();
+    if !t.is_empty() {
+        keyboard.write(&format!("{t} "));
     }
 }
 

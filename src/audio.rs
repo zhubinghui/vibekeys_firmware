@@ -637,7 +637,11 @@ impl Driver {
             );
         }
 
-        Ok(asr_result.parse_text())
+        let text = asr_result.parse_text();
+        // 识别原文进日志:排查「屏幕乱码」类问题时这是唯一真值 —— 屏幕显示经过
+        // 字库缺字过滤(GB2312 之外的字被静默跳过),不能当识别结果本身看。
+        log::info!("ASR text: {text}");
+        Ok(text)
     }
 
     pub fn start_whisper(

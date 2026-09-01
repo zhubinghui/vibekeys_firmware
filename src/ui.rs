@@ -6,7 +6,6 @@
 
 use embedded_graphics::{
     image::GetPixel,
-    mono_font::{ascii::FONT_9X15_BOLD, MonoTextStyle, MonoTextStyleBuilder},
     prelude::*,
     primitives::{PrimitiveStyle, Rectangle, StyledDrawable},
     text::{Alignment, Baseline, LineHeight, Text, TextStyleBuilder},
@@ -37,36 +36,10 @@ fn fill_rect(target: &mut FrameBuffer, rect: Rectangle, color: ColorFormat) -> a
     Ok(rect.draw_styled(&PrimitiveStyle::with_fill(color), target)?)
 }
 
-/// 在 `rect` 内画文本(**仅 ASCII**,菜单/标签用)。`bg=Some` 时给文本填背景(用于焦点高亮)。
+/// 在 `rect` 内画文本(wqy16,**全 UI 统一字体**,ASCII 与中文同路径)。
+/// `bg=Some` 时给文本填背景(用于焦点高亮)。
+/// 字体缺字(GB2312 之外)时 U8g2TextStyle 默认跳过(`ignore_unknown_chars`),不会乱码。
 fn draw_text(
-    target: &mut FrameBuffer,
-    text: &str,
-    rect: Rectangle,
-    color: ColorFormat,
-    bg: Option<ColorFormat>,
-    align: HorizontalAlignment,
-) -> anyhow::Result<()> {
-    if let Some(bg) = bg {
-        fill_rect(target, rect, bg)?;
-    }
-    let style = TextBoxStyleBuilder::new()
-        .alignment(align)
-        .height_mode(HeightMode::ShrinkToText(VerticalOverdraw::FullRowsOnly))
-        .line_height(LineHeight::Pixels(LINE_H))
-        .build();
-    TextBox::with_textbox_style(
-        text,
-        rect,
-        MonoTextStyle::new(&FONT_9X15_BOLD, color),
-        style,
-    )
-    .draw(target)?;
-    Ok(())
-}
-
-/// 与 `draw_text` 同形,但用 u8g2 文泉驿字体(**支持中文**),给 ASR 等可能含中文的文本用。
-/// 字体缺字时 U8g2TextStyle 默认跳过(`ignore_unknown_chars`),不会乱码。
-fn draw_text_cjk(
     target: &mut FrameBuffer,
     text: &str,
     rect: Rectangle,
@@ -122,6 +95,86 @@ fn flush(target: &mut FrameBuffer) -> anyhow::Result<()> {
     target.flush()
 }
 
+/// 两档布局分界:keys 窄屏(78px)放不下 y≥90 的底部元素(摘要行/信息行/提示栏等),
+/// 只有高度达标的屏(max2 172px)才绘制。所有「高屏才画」的判断统一走这里。
+const TALL_SCREEN_MIN_H: u32 = 150;
+
+fn tall_screen(height: u32) -> bool {
+    height >= TALL_SCREEN_MIN_H
+}
+
+/// 量文本像素宽(wqy16,与 draw_text 同字体)。状态栏槽位/组指示/角标等紧凑布局用,
+/// 替代 `len()*8` 估宽 —— 后者对 CJK(全宽 16px)会算错一倍。
+fn text_px_width(text: &str) -> u32 {
+    use embedded_graphics::text::renderer::TextRenderer as _;
+    U8g2TextStyle::new(u8g2_font_wqy16_t_gb2312, ColorFormat::CSS_WHITE)
+        .measure_string(text, Point::zero(), Baseline::Top)
+        .bounding_box
+        .size
+        .width
+}
+
+/// 右缘滚动条:`total > visible` 时画 3px 轨道 + 按比例青色滑块,否则不画。
+/// `top` = 列表区顶部 y(轨道从这里到屏底)。
+fn draw_scrollbar(
+    target: &mut FrameBuffer,
+    top: i32,
+    total: usize,
+    start: usize,
+    visible: usize,
+) -> anyhow::Result<()> {
+    if total <= visible {
+        return Ok(());
+    }
+    let bb = target.bounding_box();
+    let x = bb.size.width as i32 - 3;
+    let h = bb.size.height as i32 - top;
+    fill_rect(
+        target,
+        Rectangle::new(Point::new(x, top), Size::new(3, h as u32)),
+        ColorFormat::CSS_DARK_SLATE_GRAY,
+    )?;
+    let thumb_h = ((h as usize) * visible / total).max(8) as u32;
+    let max_start = total - visible;
+    let thumb_y =
+        top + (h - thumb_h as i32) * (start.min(max_start) as i32) / (max_start as i32).max(1);
+    fill_rect(
+        target,
+        Rectangle::new(Point::new(x, thumb_y), Size::new(3, thumb_h)),
+        ColorFormat::CSS_DARK_CYAN,
+    )
+}
+
+/// 右上角回滚角标:黑底橙框橙字 `^ n`(n = 距最新内容的行/格数)。返回角标 rect,
+/// 调用方负责 flush_rect;整屏/整窗重画会自然盖掉它,隐藏无需显式清除。
+pub fn draw_scroll_badge(target: &mut FrameBuffer, n: usize) -> anyhow::Result<Rectangle> {
+    let bb = target.bounding_box();
+    let text = format!("^ {n}");
+    let w = text_px_width(&text) + 10;
+    let rect = Rectangle::new(
+        Point::new(bb.size.width as i32 - w as i32 - 4, 2),
+        Size::new(w, 20),
+    );
+    fill_rect(target, rect, ColorFormat::CSS_BLACK)?;
+    rect.draw_styled(
+        &PrimitiveStyle::with_stroke(ColorFormat::CSS_DARK_ORANGE, 1),
+        target,
+    )?;
+    draw_text(
+        target,
+        &text,
+        Rectangle::new(
+            Point::new(rect.top_left.x + 5, rect.top_left.y + 1),
+            // 高度必须 ≥ LINE_H+2,否则 FullRowsOnly 整行丢弃(见 STATUS2_H 注释)。
+            Size::new(w - 8, LINE_H + 2),
+        ),
+        ColorFormat::CSS_DARK_ORANGE,
+        None,
+        HorizontalAlignment::Left,
+    )?;
+    Ok(rect)
+}
+
 // ========== 开机菜单 ==========
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -146,18 +199,21 @@ enum MenuEvt {
 }
 
 /// 开机主菜单:Next 键正向切换选项、Accept 进入、Esc 逆向。返回选中的模式。
+/// `summary`:底部设备摘要行(已存 wifi 数 / server host),矮屏(keys)自动省略。
 pub async fn boot_menu(
     target: &mut FrameBuffer,
     accept: Btn<'_>,
     esc: Btn<'_>,
     next: Btn<'_>,
+    summary: &str,
 ) -> BootChoice {
     let mut focus: usize = 0;
-    let width = target.bounding_box().size.width;
+    let bb = target.bounding_box();
+    let (width, height) = (bb.size.width, bb.size.height);
     let n = BOOT_LABELS.len();
 
     loop {
-        let _ = render_boot_menu(target, focus, width);
+        let _ = render_boot_menu(target, focus, width, height, summary);
 
         let evt = tokio::select! {
             _ = next.wait_for_falling_edge() => MenuEvt::Next,
@@ -175,7 +231,13 @@ pub async fn boot_menu(
     }
 }
 
-fn render_boot_menu(target: &mut FrameBuffer, focus: usize, width: u32) -> anyhow::Result<()> {
+fn render_boot_menu(
+    target: &mut FrameBuffer,
+    focus: usize,
+    width: u32,
+    height: u32,
+    summary: &str,
+) -> anyhow::Result<()> {
     clear(target, ColorFormat::CSS_BLACK)?;
     draw_text(
         target,
@@ -214,13 +276,44 @@ fn render_boot_menu(target: &mut FrameBuffer, focus: usize, width: u32) -> anyho
             )?;
         }
     }
+    // 底部:设备摘要 + 常驻键位提示(仅高屏;keys 78px 放不下,跳过)。
+    if tall_screen(height) {
+        draw_text(
+            target,
+            summary,
+            Rectangle::new(
+                Point::new(4, height as i32 - 54),
+                Size::new(width - 8, LINE_H + 2),
+            ),
+            ColorFormat::CSS_GRAY,
+            None,
+            HorizontalAlignment::Center,
+        )?;
+        let hint_rect = Rectangle::new(Point::new(0, height as i32 - 20), Size::new(width, 20));
+        fill_rect(target, hint_rect, ColorFormat::CSS_DARK_SLATE_GRAY)?;
+        draw_text(
+            target,
+            "NEXT=move  ACCEPT=enter  ESC=up",
+            hint_rect,
+            ColorFormat::CSS_WHEAT,
+            None,
+            HorizontalAlignment::Center,
+        )?;
+    }
     flush(target)
 }
 
 // ========== Setting 页面 ==========
 
-/// 密码字符轮:0-9 a-z A-Z。
-const CHARSET: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+/// 密码字符组:NEXT 键切组,组内旋钮/滚轮选字。最后一组是符号(WiFi 密码常见)。
+/// 每组轮盘末尾附加一个虚拟 OK 格(索引 == 组长度)用于提交。
+const CHARSET_GROUPS: [&[u8]; 4] = [
+    b"abcdefghijklmnopqrstuvwxyz",
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    b"0123456789",
+    b"!@#$%^&*()-_=+[]{};:'\",.<>/?`~|\\",
+];
+const GROUP_LABELS: [&str; 4] = ["abc", "ABC", "123", "#!?"];
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum SettingState {
@@ -324,6 +417,7 @@ pub async fn setting_page(
     let mut pending_ssid: String = String::new();
     let mut password: String = String::new();
     let mut cur_char: usize = 0;
+    let mut cur_group: usize = 0; // CHARSET_GROUPS 当前组(NEXT 切换)
 
     loop {
         match state {
@@ -412,15 +506,47 @@ pub async fn setting_page(
                 }
             }
             SettingState::PassEditor => {
-                let _ = render_password(target, &pending_ssid, &password, cur_char);
+                let group = CHARSET_GROUPS[cur_group];
+                let wheel_len = group.len() + 1; // 末位 = OK(提交)
+                let _ = render_password(target, &pending_ssid, &password, cur_group, cur_char);
                 match wait_input(rot_a, accept, esc, next, backspace).await {
-                    InputEvt::Next => cur_char = rotate_index(cur_char, CHARSET.len(), true),
+                    InputEvt::Next => {
+                        // NEXT 切字符组(abc/ABC/123/#!?),焦点回组首。
+                        cur_group = (cur_group + 1) % CHARSET_GROUPS.len();
+                        cur_char = 0;
+                    }
                     InputEvt::Rotate => {
-                        cur_char = rotate_index(cur_char, CHARSET.len(), rot_down(rot_a, rot_b));
+                        cur_char = rotate_index(cur_char, wheel_len, rot_down(rot_a, rot_b));
                     }
                     InputEvt::Accept => {
-                        if password.len() < 32 {
-                            password.push(CHARSET[cur_char] as char);
+                        if cur_char == group.len() {
+                            // OK 格:提交 —— 更新已有 / 新增一条,落盘。
+                            match cur_editing {
+                                Some(i) if i < setting.wifi_list.len() => {
+                                    setting.wifi_list[i].ssid = pending_ssid.clone();
+                                    setting.wifi_list[i].pass = password.clone();
+                                }
+                                _ if setting.wifi_list.len() < MAX_WIFI_CREDS => {
+                                    setting.wifi_list.push(WifiCred {
+                                        ssid: pending_ssid.clone(),
+                                        pass: password.clone(),
+                                    });
+                                }
+                                _ => {}
+                            }
+                            if let Err(e) = BtSetting::save_wifi_list(nvs, &setting.wifi_list) {
+                                log::error!("Failed to save wifi_list: {:?}", e);
+                            }
+                            // 回到 cred 列表,焦点回到刚编辑/新增的那条。
+                            cred_focus =
+                                cur_editing.unwrap_or(setting.wifi_list.len().saturating_sub(1));
+                            cur_editing = None;
+                            pending_ssid.clear();
+                            password.clear();
+                            cur_char = 0;
+                            state = SettingState::WifiCreds;
+                        } else if password.len() < 32 {
+                            password.push(group[cur_char] as char);
                         }
                     }
                     InputEvt::Backspace => {
@@ -428,29 +554,11 @@ pub async fn setting_page(
                         password.pop();
                     }
                     InputEvt::Esc => {
-                        // 提交:更新已有 / 新增一条。
-                        match cur_editing {
-                            Some(i) if i < setting.wifi_list.len() => {
-                                setting.wifi_list[i].ssid = pending_ssid.clone();
-                                setting.wifi_list[i].pass = password.clone();
-                            }
-                            _ if setting.wifi_list.len() < MAX_WIFI_CREDS => {
-                                setting.wifi_list.push(WifiCred {
-                                    ssid: pending_ssid.clone(),
-                                    pass: password.clone(),
-                                });
-                            }
-                            _ => {}
-                        }
-                        if let Err(e) = BtSetting::save_wifi_list(nvs, &setting.wifi_list) {
-                            log::error!("Failed to save wifi_list: {:?}", e);
-                        }
-                        // 回到 cred 列表,焦点回到刚编辑/新增的那条。
-                        cred_focus =
-                            cur_editing.unwrap_or(setting.wifi_list.len().saturating_sub(1));
+                        // 取消:丢弃本次编辑,不落盘(提交只走 OK 格)。
                         cur_editing = None;
                         pending_ssid.clear();
                         password.clear();
+                        cur_char = 0;
                         state = SettingState::WifiCreds;
                     }
                 }
@@ -789,12 +897,12 @@ pub fn render_list(
             )?;
         }
     }
+    draw_scrollbar(target, start_y, items.len(), start, visible)?;
     flush(target)
 }
 
-/// session 列表:蓝底 = 选中(焦点);文字色 = working 白 / waiting(非 working)橙。
-/// 与通用 render_list 不同 —— 这里底色表示焦点、文字色表示 working 状态,二者正交
-/// (故不复用 render_list 的青色焦点底色)。条目用文泉驿字体(支持中文标题)。
+/// session 列表:青底 = 选中(焦点,与其它列表统一);状态用 ●/○ 前缀 + 文字色双编码
+/// (● working 白 / ○ waiting 橙),色弱也能靠形状分辨。条目用文泉驿字体(支持中文标题)。
 pub fn render_session_list(
     target: &mut FrameBuffer,
     title: &str,
@@ -829,9 +937,9 @@ pub fn render_session_list(
             Size::new(width, item_h),
         );
         let is_focus = i == focus;
-        // 蓝底 = 选中(焦点);文字色 = working 白 / waiting(非 working)橙。二者正交。
+        // 青底 = 选中(焦点,与其它列表统一);文字色 = working 白 / waiting 橙。
         let bg = if is_focus {
-            Some(ColorFormat::CSS_DARK_BLUE)
+            Some(ColorFormat::CSS_DARK_CYAN)
         } else {
             None
         };
@@ -840,9 +948,11 @@ pub fn render_session_list(
         } else {
             ColorFormat::CSS_DARK_ORANGE
         };
-        // 文泉驿字体:标题可能含中文。标签由 mqtt::session_labels 截到 15 字符,单行不溢出。
-        draw_text_cjk(target, label, rect, color, bg, HorizontalAlignment::Left)?;
+        // ●/○ 前缀:状态不只靠颜色。标签由 mqtt::session_labels 截到 15 字符,单行不溢出。
+        let line = format!("{} {}", if *is_working { "●" } else { "○" }, label);
+        draw_text(target, &line, rect, color, bg, HorizontalAlignment::Left)?;
     }
+    draw_scrollbar(target, start_y, items.len(), start, visible)?;
     flush(target)
 }
 
@@ -850,19 +960,55 @@ fn render_password(
     target: &mut FrameBuffer,
     header: &str,
     password: &str,
+    group: usize,
     focus: usize,
 ) -> anyhow::Result<()> {
     let width = target.bounding_box().size.width;
     let height = target.bounding_box().size.height;
     clear(target, ColorFormat::CSS_BLACK)?;
+    // 标题行:左 ssid(截断给组指示留位),右侧四个字符组标签,当前组高亮。
+    let header_disp = crate::util::truncate_ellipsis(header, 18);
     draw_text(
         target,
-        header,
-        Rectangle::new(Point::new(4, 0), Size::new(width - 4, LINE_H + 2)),
+        &header_disp,
+        Rectangle::new(
+            Point::new(4, 0),
+            Size::new(width.saturating_sub(140), LINE_H + 2),
+        ),
         ColorFormat::CSS_WHEAT,
         None,
         HorizontalAlignment::Left,
     )?;
+    let total_gw: i32 = GROUP_LABELS
+        .iter()
+        .map(|l| text_px_width(l) as i32 + 6)
+        .sum();
+    let mut gx = width as i32 - 4 - total_gw;
+    for (gi, gl) in GROUP_LABELS.iter().enumerate() {
+        let gw = text_px_width(gl) + 4;
+        let grect = Rectangle::new(Point::new(gx, 0), Size::new(gw, LINE_H + 2));
+        if gi == group {
+            fill_rect(target, grect, ColorFormat::CSS_DARK_SLATE_GRAY)?;
+            draw_text(
+                target,
+                gl,
+                grect,
+                ColorFormat::CSS_WHITE,
+                None,
+                HorizontalAlignment::Center,
+            )?;
+        } else {
+            draw_text(
+                target,
+                gl,
+                grect,
+                ColorFormat::CSS_GRAY,
+                None,
+                HorizontalAlignment::Center,
+            )?;
+        }
+        gx += gw as i32 + 2;
+    }
     draw_text(
         target,
         password,
@@ -872,30 +1018,30 @@ fn render_password(
         HorizontalAlignment::Left,
     )?;
     // 插入点光标:量出密码文本像素宽,在末尾画一个块状光标,随输入/退格左右移动。
-    let text_w = Text::new(
-        password,
-        Point::zero(),
-        MonoTextStyle::new(&FONT_9X15_BOLD, ColorFormat::CSS_WHITE),
-    )
-    .bounding_box()
-    .size
-    .width;
+    let text_w = text_px_width(password);
     fill_rect(
         target,
-        Rectangle::new(Point::new(4 + text_w as i32, 18), Size::new(9, 15)),
+        Rectangle::new(Point::new(4 + text_w as i32, 18), Size::new(8, 16)),
         ColorFormat::CSS_WHITE,
     )?;
-    // 字符轮盘:一排字符,中间高亮(= focus),Next 键/旋钮滑动
-    let n = ((width / 16) as usize).clamp(5, 11);
+    // 字符轮盘:当前组字符 + 末位 OK 格,中间高亮(= focus),旋钮滑动、NEXT 切组。
+    let chars = CHARSET_GROUPS[group];
+    let wheel_len = chars.len() + 1; // 末位 = OK
+    let n = ((width / 16) as usize).clamp(5, 11).min(wheel_len);
     let cell_w = width / n as u32;
     let half = n / 2;
     let cell_h = LINE_H + 6;
     let y = 38;
     for k in 0..n {
-        let idx = (focus + k + CHARSET.len() - half) % CHARSET.len();
+        let idx = (focus + k + wheel_len - half) % wheel_len;
         let x = (k as u32) * cell_w;
         let rect = Rectangle::new(Point::new(x as i32, y), Size::new(cell_w, cell_h));
-        let ch = (CHARSET[idx] as char).to_string();
+        let is_ok = idx == chars.len();
+        let ch = if is_ok {
+            "OK".to_string()
+        } else {
+            (chars[idx] as char).to_string()
+        };
         if idx == focus {
             fill_rect(target, rect, ColorFormat::CSS_DARK_CYAN)?;
             draw_text(
@@ -904,6 +1050,17 @@ fn render_password(
                 rect,
                 ColorFormat::CSS_WHITE,
                 Some(ColorFormat::CSS_DARK_CYAN),
+                HorizontalAlignment::Center,
+            )?;
+        } else if is_ok {
+            // OK 格常驻绿底,与普通字符区分。
+            fill_rect(target, rect, ColorFormat::CSS_DARK_GREEN)?;
+            draw_text(
+                target,
+                &ch,
+                rect,
+                ColorFormat::CSS_WHITE,
+                Some(ColorFormat::CSS_DARK_GREEN),
                 HorizontalAlignment::Center,
             )?;
         } else {
@@ -921,7 +1078,7 @@ fn render_password(
     let hint_y = (height as i32) - LINE_H as i32 - 2;
     draw_text(
         target,
-        "BkSp=del ESC=ok",
+        "NEXT=abc/#!?  OK=save  ESC=cancel",
         Rectangle::new(Point::new(4, hint_y), Size::new(width - 4, LINE_H + 2)),
         ColorFormat::CSS_WHEAT,
         None,
@@ -990,8 +1147,8 @@ pub fn render_keyboard_view(
     feedback: &str,
 ) -> anyhow::Result<()> {
     let bb = target.bounding_box();
-    // 不再 clear 成纯黑:画布重置为背景快照(用户上传的背景图,无图时即纯黑),
-    // 状态栏与文字叠加其上 —— 背景图因此在整个键盘模式期间常驻,而非入场闪 2 秒。
+    // 画布重置为背景快照(背景图已改为开机画面,进模式后快照通常是纯黑;
+    // Remote 占位页 fix_background 过的画面也经此恢复)。
     target.restore_background();
     draw_status_bar(target, wifi_on, Some(ble_on))?;
     let anim = Rectangle::new(
@@ -1008,14 +1165,236 @@ pub fn render_keyboard_view(
         TextBox::with_textbox_style(
             feedback,
             anim,
-            MonoTextStyleBuilder::new()
-                .font(&FONT_9X15_BOLD)
-                .text_color(ColorFormat::CSS_WHITE)
-                .background_color(ColorFormat::CSS_BLACK)
-                .build(),
+            crate::lcd::MyTextStyle {
+                font_style: U8g2TextStyle::new(u8g2_font_wqy16_t_gb2312, ColorFormat::CSS_WHITE),
+                vertical_offset: 3,
+                bg_color: Some(ColorFormat::CSS_BLACK),
+            },
             style,
         )
         .draw(target)?;
+    }
+    flush(target)
+}
+
+/// OTA 进度页:标题 + 进度条 + 字节/百分比 + 阶段 + 断电警告。
+/// `total=None`(浏览器上传 / 无 content-length)时只显示已写字节数。
+/// 矮屏(keys)省略阶段行与警告行。
+pub fn render_ota_progress(
+    target: &mut FrameBuffer,
+    written: usize,
+    total: Option<usize>,
+    phase: &str,
+) -> anyhow::Result<()> {
+    let bb = target.bounding_box();
+    let (width, height) = (bb.size.width, bb.size.height);
+    clear(target, ColorFormat::CSS_BLACK)?;
+    draw_text(
+        target,
+        concat!("OTA  v", env!("CARGO_PKG_VERSION")),
+        Rectangle::new(Point::new(4, 0), Size::new(width - 8, LINE_H + 2)),
+        ColorFormat::CSS_WHEAT,
+        None,
+        HorizontalAlignment::Left,
+    )?;
+    let bar_w = width.saturating_sub(40);
+    let bar_y = (height as i32) / 2 - 16;
+    let bar = Rectangle::new(Point::new(20, bar_y), Size::new(bar_w, 14));
+    bar.draw_styled(
+        &PrimitiveStyle::with_stroke(ColorFormat::CSS_WHITE, 1),
+        target,
+    )?;
+    let known_total = total.filter(|t| *t > 0);
+    if let Some(t) = known_total {
+        let inner_w = bar_w.saturating_sub(4) as usize;
+        let fill_w = (inner_w * written.min(t) / t) as u32;
+        fill_rect(
+            target,
+            Rectangle::new(Point::new(22, bar_y + 2), Size::new(fill_w, 10)),
+            ColorFormat::CSS_DARK_CYAN,
+        )?;
+    }
+    let line = match known_total {
+        Some(t) => format!(
+            "{} / {} KB  {}%",
+            written / 1024,
+            t / 1024,
+            (written.min(t)) * 100 / t
+        ),
+        None => format!("{} KB", written / 1024),
+    };
+    draw_text(
+        target,
+        &line,
+        Rectangle::new(Point::new(4, bar_y + 20), Size::new(width - 8, LINE_H + 2)),
+        ColorFormat::CSS_WHITE,
+        None,
+        HorizontalAlignment::Center,
+    )?;
+    if tall_screen(height) {
+        draw_text(
+            target,
+            phase,
+            Rectangle::new(Point::new(4, bar_y + 42), Size::new(width - 8, LINE_H + 2)),
+            ColorFormat::CSS_GRAY,
+            None,
+            HorizontalAlignment::Center,
+        )?;
+        draw_text(
+            target,
+            "do not power off",
+            Rectangle::new(
+                Point::new(4, height as i32 - LINE_H as i32 - 2),
+                Size::new(width - 8, LINE_H + 2),
+            ),
+            ColorFormat::CSS_YELLOW,
+            None,
+            HorizontalAlignment::Center,
+        )?;
+    }
+    flush(target)
+}
+
+/// 键盘模式稳态主屏的数据(按 MIC 前用户想确认的事)。
+pub struct KeyboardHome<'a> {
+    pub wifi_on: bool,
+    /// 已连接的 SSID;未连接传 ""(显示 "no wifi")。
+    pub ssid: &'a str,
+    /// BLE 已连接主机数。
+    pub ble_conns: usize,
+    /// 本地 ASR 可用(driver + config 齐备)。
+    pub asr_on: bool,
+    /// true = 内置 Whisper;false = MIC 透传主机听写。
+    pub asr_builtin: bool,
+    /// true = Toggle(按一下开/关);false = PushToTalk。
+    pub mic_toggle: bool,
+    pub ble_mac: &'a str,
+    /// 入场首帧显示一次 "ESC+ACCEPT = menu" 提示。
+    pub show_exit_hint: bool,
+}
+
+/// 状态栏高度(render_keyboard_home 专用)。必须 ≥ LINE_H+2:embedded-text 的
+/// FullRowsOnly 会把装不满整行的行**整行丢弃**,18px 盒子里 wqy16 一行都画不出来
+/// (真机踩过:四个色点在、标签全消失)。
+const STATUS2_H: u32 = 20;
+
+/// 键盘模式稳态主屏:四槽状态栏(WiFi/BLE·n/MQTT/ASR + 版本号)+ 居中标识
+/// + 信息行(SSID / ASR 路径 / MIC 模式)。矮屏(keys)省略信息行与提示。
+pub fn render_keyboard_home(target: &mut FrameBuffer, h: &KeyboardHome) -> anyhow::Result<()> {
+    let bb = target.bounding_box();
+    let (width, height) = (bb.size.width, bb.size.height);
+    target.restore_background();
+    fill_rect(
+        target,
+        Rectangle::new(Point::new(0, 0), Size::new(width, STATUS2_H)),
+        ColorFormat::CSS_DARK_SLATE_GRAY,
+    )?;
+    let ble_text = format!("BLE:{}", h.ble_conns);
+    // (标签, 圆点颜色):绿=已连,红=WiFi 未连(配置了但连不上/无网络),
+    // 蓝=BLE 有连接,灰=关/不适用。键盘模式无 MQTT,恒灰。
+    let slots: [(&str, ColorFormat); 4] = [
+        (
+            "WiFi",
+            if h.wifi_on {
+                ColorFormat::CSS_GREEN
+            } else {
+                ColorFormat::CSS_RED
+            },
+        ),
+        (
+            &ble_text,
+            if h.ble_conns > 0 {
+                ColorFormat::CSS_DODGER_BLUE
+            } else {
+                ColorFormat::CSS_GRAY
+            },
+        ),
+        ("MQTT", ColorFormat::CSS_GRAY),
+        (
+            "ASR",
+            if h.asr_on {
+                ColorFormat::CSS_GREEN
+            } else {
+                ColorFormat::CSS_GRAY
+            },
+        ),
+    ];
+    let mut x: i32 = 4;
+    for (label, dot) in slots {
+        fill_rect(
+            target,
+            Rectangle::new(Point::new(x, 7), Size::new(6, 6)),
+            dot,
+        )?;
+        let lw = text_px_width(label) + 4;
+        draw_text(
+            target,
+            label,
+            Rectangle::new(Point::new(x + 9, 0), Size::new(lw, STATUS2_H)),
+            ColorFormat::CSS_WHITE,
+            None,
+            HorizontalAlignment::Left,
+        )?;
+        x += 9 + lw as i32 + 6;
+    }
+    draw_text(
+        target,
+        concat!("v", env!("CARGO_PKG_VERSION")),
+        Rectangle::new(Point::new(width as i32 - 60, 0), Size::new(56, STATUS2_H)),
+        ColorFormat::CSS_GRAY,
+        None,
+        HorizontalAlignment::Right,
+    )?;
+    // 居中标识
+    draw_text(
+        target,
+        &format!("Keyboard\n{}", h.ble_mac),
+        Rectangle::new(
+            Point::new(0, (height / 2) as i32 - LINE_H as i32),
+            Size::new(width, LINE_H * 2 + 4),
+        ),
+        ColorFormat::CSS_WHITE,
+        None,
+        HorizontalAlignment::Center,
+    )?;
+    // 信息行 + 一次性退出提示(矮屏放不下,跳过)。
+    if tall_screen(height) {
+        let info = format!(
+            "{}  ASR:{}  MIC:{}",
+            if h.ssid.is_empty() { "no wifi" } else { h.ssid },
+            if !h.asr_on {
+                "off"
+            } else if h.asr_builtin {
+                "builtin"
+            } else {
+                "host"
+            },
+            if h.mic_toggle { "TOG" } else { "PTT" },
+        );
+        draw_text(
+            target,
+            &info,
+            Rectangle::new(
+                Point::new(4, height as i32 - 46),
+                Size::new(width - 8, LINE_H + 2),
+            ),
+            ColorFormat::CSS_WHEAT,
+            None,
+            HorizontalAlignment::Left,
+        )?;
+        if h.show_exit_hint {
+            draw_text(
+                target,
+                "ESC+ACCEPT = menu",
+                Rectangle::new(
+                    Point::new(4, height as i32 - 22),
+                    Size::new(width - 8, LINE_H + 2),
+                ),
+                ColorFormat::CSS_GRAY,
+                None,
+                HorizontalAlignment::Center,
+            )?;
+        }
     }
     flush(target)
 }
@@ -1075,6 +1454,24 @@ impl Popup {
     /// 显示弹窗。若已打开则只重画内容(不重复 backup)。
     pub fn show(&mut self, target: &mut FrameBuffer, text: &str) -> anyhow::Result<()> {
         self.show_with_border(target, text, ColorFormat::CSS_WHITE)
+    }
+
+    // 语义弹窗三色约定(全局统一,勿在调用点散写颜色):
+    // 黄=进行中 / 绿=就绪·监听中 / 红=错误;白(show)留给中性询问。
+
+    /// 进行中(loading/connecting 等):黄框。
+    pub fn show_busy(&mut self, target: &mut FrameBuffer, text: &str) -> anyhow::Result<()> {
+        self.show_with_border(target, text, ColorFormat::CSS_YELLOW)
+    }
+
+    /// 就绪/监听中(listening/recording 等):绿框。
+    pub fn show_ready(&mut self, target: &mut FrameBuffer, text: &str) -> anyhow::Result<()> {
+        self.show_with_border(target, text, ColorFormat::CSS_GREEN)
+    }
+
+    /// 错误(断线/失败等):红框。
+    pub fn show_error(&mut self, target: &mut FrameBuffer, text: &str) -> anyhow::Result<()> {
+        self.show_with_border(target, text, ColorFormat::CSS_RED)
     }
 
     /// 显示弹窗,指定边框颜色(connecting=黄 / listening=绿 等)。若已打开则只重画(不重复 backup)。
@@ -1166,7 +1563,7 @@ fn draw_popup_with_border(
             r.size.height.saturating_sub(4),
         ),
     );
-    draw_text_cjk(
+    draw_text(
         target,
         text,
         inner,

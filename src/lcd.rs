@@ -598,6 +598,8 @@ pub struct UI {
     /// delta 帧被节流(process 了但没 render)时置 true,主循环兜底补刷。
     /// 防止 burst 最后几帧被吞:输出停了之后没有新 delta 触发渲染,这些变更永远不显示。
     terminal_render_pending: bool,
+    /// 回滚角标当前是否显示(text 模式;隐藏时需整窗重画清除)。
+    scroll_badge_shown: bool,
 }
 
 /// 终端画布是物理屏高的几倍。renderer/parser/sync 都按这个高度,本地用 render_rows 只显示
@@ -678,6 +680,7 @@ impl UI {
             terminal_offset: 0,
             terminal_last_render: None,
             terminal_render_pending: false,
+            scroll_badge_shown: false,
         }
     }
 
@@ -690,6 +693,7 @@ impl UI {
             terminal_offset: 0,
             terminal_last_render: None,
             terminal_render_pending: false,
+            scroll_badge_shown: false,
         }
     }
 
@@ -795,6 +799,7 @@ impl UI {
                 self.terminal_render_pending = false;
             }
         }
+        self.update_scroll_badge()?;
         Ok(())
     }
 
@@ -942,6 +947,7 @@ impl UI {
         if let Some(rect) = self.render_terminal_window_diff(true)? {
             self.display.flush_rect(rect)?;
         }
+        self.update_scroll_badge()?;
         Ok(true)
     }
 
@@ -954,6 +960,7 @@ impl UI {
         if let Some(rect) = self.render_terminal_window_diff(true)? {
             self.display.flush_rect(rect)?;
         }
+        self.update_scroll_badge()?;
         Ok(true)
     }
 
@@ -963,6 +970,28 @@ impl UI {
         self.terminal_offset = 0;
         self.terminal_last_render = None;
         self.terminal_render_pending = false;
+        self.scroll_badge_shown = false;
+    }
+
+    /// text 终端回滚角标:不在内容底部时右上角显示 `^ 行数`;回到底部时整窗重画清除。
+    /// 渲染路径(帧到达 / 平移 / 恢复缓存)末尾调用,保证角标与窗口位置一致。
+    fn update_scroll_badge(&mut self) -> anyhow::Result<()> {
+        if self.terminal_parser.is_none() {
+            return Ok(());
+        }
+        let bottom = self.terminal_content_bottom_offset();
+        let rows_up = bottom.saturating_sub(self.terminal_offset);
+        if rows_up > 0 {
+            let rect = crate::ui::draw_scroll_badge(&mut self.display, rows_up as usize)?;
+            self.display.flush_rect(rect)?;
+            self.scroll_badge_shown = true;
+        } else if self.scroll_badge_shown {
+            if let Some(rect) = self.render_terminal_window_diff(true)? {
+                self.display.flush_rect(rect)?;
+            }
+            self.scroll_badge_shown = false;
+        }
+        Ok(())
     }
 
     // ========== 辅助方法 ==========

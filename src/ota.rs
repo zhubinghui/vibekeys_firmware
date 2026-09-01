@@ -36,6 +36,35 @@ enum OtaEvent {
     DownloadLatest,
 }
 
+/// 进度阶段(枚举而非裸字符串,发送端拼错编译期就报)。
+#[derive(Clone, Copy)]
+enum OtaPhase {
+    Downloading,
+    Uploading,
+    Finalizing,
+}
+
+impl OtaPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            OtaPhase::Downloading => "downloading",
+            OtaPhase::Uploading => "uploading",
+            OtaPhase::Finalizing => "finalizing",
+        }
+    }
+}
+
+/// worker → 主线程的进度事件(屏幕由主线程持有,worker 只发数据)。
+struct OtaProgress {
+    written: usize,
+    /// 目标总字节数;浏览器上传 / 无 content-length 时为 None。
+    total: Option<usize>,
+    phase: OtaPhase,
+}
+
+/// 进度上报节流:每写入这么多字节报一次(4KB 一报会刷屏过频)。
+const PROGRESS_STEP: usize = 64 * 1024;
+
 /// OTA 只读输入(scan_list + setting)打包成一个 struct 按引用传,避免 ota::run 参数过多
 /// 触发 Xtensa codegen bug(最后一个栈参数 setting 被传成 null)。打包后 ota::run 共 6 个
 /// 参数,全进寄存器(a2-a7),不压栈。
@@ -122,36 +151,65 @@ pub fn run(
     )?;
 
     let (tx, rx) = std::sync::mpsc::channel::<OtaEvent>();
+    let (ptx, prx) = std::sync::mpsc::channel::<OtaProgress>();
     let screen_tx = tx.clone();
     let http_server = ota_http_server(tx)?;
     let ota_worker = std::thread::Builder::new()
         .name("ota-worker".to_string())
         .stack_size(1024 * 24)
         .spawn(move || {
-            if let Err(e) = ota_task(rx) {
+            if let Err(e) = ota_task(rx, ptx) {
                 log::error!("OTA worker failed: {e:?}");
             }
         })?;
 
-    // 轮询按钮:accept 触发下载最新;esc 退出回 boot menu。HTTP 上传通路始终在线。
+    // 轮询按钮 + 排水进度事件。accept 触发下载最新;esc 退出回 boot menu。
+    // HTTP 上传通路始终在线:首个进度事件到达即切进度画面并忽略按键(更新不可中断)。
+    // 成功路径由 worker restart;进度开始后通道断开 = worker 失败退出,提示后回菜单。
+    let mut updating = false;
     loop {
-        if accept_btn.is_low() {
-            wait_button_release(accept_btn);
-            log::info!("OTA: accept pressed, downloading latest from release");
-            crate::lcd::display_text(
-                target,
-                "OTA Mode\n Downloading latest...\n Device will reboot",
-                0,
-            )?;
-            let _ = screen_tx.send(OtaEvent::DownloadLatest);
-            break;
+        let mut latest: Option<OtaProgress> = None;
+        let mut worker_gone = false;
+        loop {
+            match prx.try_recv() {
+                Ok(p) => latest = Some(p),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    worker_gone = true;
+                    break;
+                }
+            }
         }
-        if esc_btn.is_low() {
+        if let Some(p) = latest {
+            updating = true;
+            let _ = crate::ui::render_ota_progress(target, p.written, p.total, p.phase.as_str());
+        }
+        // 通道断开 = worker 已退出。成功路径在 worker 内 restart,走到这一律是失败——
+        // 包括 HTTP 连接/TLS/404 等在**首个进度帧之前**就出错的情况(此前只在
+        // `updating` 后才处理,早期失败会让屏幕停在 "Requesting latest..." 且
+        // 再按 ACCEPT 只是朝已关闭的通道发消息,静默无效)。
+        if worker_gone {
+            crate::lcd::display_text(target, "OTA failed\n ESC to back", 0)?;
+            while esc_btn.is_high() {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
             wait_button_release(esc_btn);
-            log::info!("OTA: esc pressed, exiting to boot menu");
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        if !updating {
+            if accept_btn.is_low() {
+                wait_button_release(accept_btn);
+                log::info!("OTA: accept pressed, downloading latest from release");
+                crate::lcd::display_text(target, "OTA Mode\n Requesting latest...", 0)?;
+                let _ = screen_tx.send(OtaEvent::DownloadLatest);
+            }
+            if esc_btn.is_low() {
+                wait_button_release(esc_btn);
+                log::info!("OTA: esc pressed, exiting to boot menu");
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
     // 关闭所有 sender(http_server 持有 upload/download 的 clone,screen_tx 是我们的),
@@ -237,11 +295,14 @@ fn ota_http_server(
 
 /// worker:按到达的事件分发。DataChunk/DownloadLatest 各自接管 rx 走完整流程并 restart;
 /// rx 关闭(主线程退出 OTA 模式)时返回 Ok。
-fn ota_task(rx: std::sync::mpsc::Receiver<OtaEvent>) -> anyhow::Result<()> {
+fn ota_task(
+    rx: std::sync::mpsc::Receiver<OtaEvent>,
+    ptx: std::sync::mpsc::Sender<OtaProgress>,
+) -> anyhow::Result<()> {
     while let Ok(ev) = rx.recv() {
         match ev {
-            OtaEvent::DataChunk(data) => return ota_write_upload(rx, data),
-            OtaEvent::DownloadLatest => return ota_download_latest(),
+            OtaEvent::DataChunk(data) => return ota_write_upload(rx, data, ptx),
+            OtaEvent::DownloadLatest => return ota_download_latest(ptx),
             OtaEvent::Complete => {}
         }
     }
@@ -252,6 +313,7 @@ fn ota_task(rx: std::sync::mpsc::Receiver<OtaEvent>) -> anyhow::Result<()> {
 fn ota_write_upload(
     rx: std::sync::mpsc::Receiver<OtaEvent>,
     first_chunk: Vec<u8>,
+    ptx: std::sync::mpsc::Sender<OtaProgress>,
 ) -> anyhow::Result<()> {
     let mut ota = EspOta::new()?;
     ota.mark_running_slot_valid()?;
@@ -259,12 +321,28 @@ fn ota_write_upload(
     let mut update = ota.initiate_update()?;
     log::info!("OTA upload first chunk: {} bytes", first_chunk.len());
     update.write(&first_chunk)?;
+    let mut written = first_chunk.len();
+    let mut last_sent = 0usize;
+    let _ = ptx.send(OtaProgress {
+        written,
+        total: None,
+        phase: OtaPhase::Uploading,
+    });
 
     while let Ok(ev) = rx.recv() {
         match ev {
             OtaEvent::DataChunk(data) => {
                 log::info!("OTA chunk: {} bytes", data.len());
                 update.write(&data)?;
+                written += data.len();
+                if written - last_sent >= PROGRESS_STEP {
+                    last_sent = written;
+                    let _ = ptx.send(OtaProgress {
+                        written,
+                        total: None,
+                        phase: OtaPhase::Uploading,
+                    });
+                }
             }
             OtaEvent::Complete => break,
             OtaEvent::DownloadLatest => {
@@ -272,6 +350,11 @@ fn ota_write_upload(
             }
         }
     }
+    let _ = ptx.send(OtaProgress {
+        written,
+        total: Some(written),
+        phase: OtaPhase::Finalizing,
+    });
     update.complete()?;
     log::info!("OTA upload complete, restarting into new firmware");
     restart();
@@ -279,7 +362,7 @@ fn ota_write_upload(
 
 /// 从 GitHub release 下载最新固件写进对面分区。带 content-length 时按已知尺寸擦写,
 /// 否则擦整分区。
-fn ota_download_latest() -> anyhow::Result<()> {
+fn ota_download_latest(ptx: std::sync::mpsc::Sender<OtaProgress>) -> anyhow::Result<()> {
     log::info!("OTA download latest from {}", OTA_DOWNLOAD_URL);
 
     let config = esp_idf_svc::http::client::Configuration {
@@ -316,8 +399,16 @@ fn ota_download_latest() -> anyhow::Result<()> {
         }
     };
 
+    // 起始进度帧:主线程据此立即从「Requesting latest...」切到进度画面。
+    let _ = ptx.send(OtaProgress {
+        written: 0,
+        total: content_len,
+        phase: OtaPhase::Downloading,
+    });
+
     let mut buf = vec![0u8; 8192];
     let mut total = 0usize;
+    let mut last_sent = 0usize;
     loop {
         let n = response.read(&mut buf)?;
         if n == 0 {
@@ -325,9 +416,22 @@ fn ota_download_latest() -> anyhow::Result<()> {
         }
         update.write(&buf[..n])?;
         total += n;
+        if total - last_sent >= PROGRESS_STEP {
+            last_sent = total;
+            let _ = ptx.send(OtaProgress {
+                written: total,
+                total: content_len,
+                phase: OtaPhase::Downloading,
+            });
+        }
         log::info!("OTA download chunk: {} bytes, total {}", n, total);
     }
 
+    let _ = ptx.send(OtaProgress {
+        written: total,
+        total: content_len.or(Some(total)),
+        phase: OtaPhase::Finalizing,
+    });
     update.complete()?;
     log::info!("OTA download complete: {} bytes, restarting", total);
     restart();
